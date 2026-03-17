@@ -23,14 +23,9 @@ def get_search_urls(trip):
         {"name": "携程_HND", "direction": "return", "label": "回程 PVG→HND",
          "url": f"https://flights.ctrip.com/online/list/oneway-PVG-HND?depdate={RT}&cabin=y&adult=1&child=0&infant=0",
          "wait": 8},
-        # ━━━ Google Flights 中国站（CNY）━━━
-        {"name": "Google_CN", "direction": "outbound", "label": "去程 NRT→PVG",
-         "url": f"https://www.google.com/travel/flights?q=Flights+from+NRT+to+PVG+on+{OB}+one+way&curr=CNY&hl=zh-CN",
-         "wait": 10},
-        {"name": "Google_CN", "direction": "return", "label": "回程 PVG→NRT",
-         "url": f"https://www.google.com/travel/flights?q=Flights+from+PVG+to+NRT+on+{RT}+one+way&curr=CNY&hl=zh-CN",
-         "wait": 10},
         # ━━━ Google Flights 日本站（JPY，反杀熟）━━━
+        # 注：Google CN 已移除，LLM 持续误读其 CNY 四位数价格
+        #     日本站用 JPY 五位数价格，LLM 识别更稳定
         {"name": "Google_JP", "direction": "outbound", "label": "去程 NRT→PVG",
          "url": f"https://www.google.co.jp/travel/flights?q=Flights+from+NRT+to+PVG+on+{OB}+one+way&curr=JPY&hl=ja",
          "wait": 10},

@@ -68,53 +68,64 @@ def analyze_screenshot(screenshot_info):
 - 如果价格标注为"往返价"，请在 booking_note 中注明，price_cny 填往返总价的一半
 - 只提取直达航班"""
 
-    try:
-        resp = requests.post(
-            f"{LLM_BASE_URL}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {LLM_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": LLM_MODEL,
-                "messages": [{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {
-                            "url": f"data:image/png;base64,{img_b64}",
-                            "detail": "high",
-                        }},
-                    ],
-                }],
-                "max_tokens": 2000,
-                "temperature": 0,
-            },
-            timeout=60,
-        )
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"]
+    import time
 
-        json_match = re.search(r"\{[\s\S]*\}", content)
-        if json_match:
-            data = json.loads(json_match.group())
-            # 价格校验：换算后 CNY 单程 200-8000 合理
-            valid_flights = []
-            for f in data.get("flights", []):
-                price = f.get("price_cny")
-                if price and 200 <= price <= 8000:
-                    valid_flights.append(f)
-                elif price:
-                    log.warning(f"  过滤异常价格: ¥{price} ({f.get('airline', '')})")
-            data["flights"] = valid_flights
-            data["lowest_price"] = min((f["price_cny"] for f in valid_flights), default=None)
-            return data
-        else:
-            return {"flights": [], "lowest_price": None, "error": f"LLM返回非JSON: {content[:200]}"}
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            resp = requests.post(
+                f"{LLM_BASE_URL}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {LLM_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": LLM_MODEL,
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {
+                                "url": f"data:image/png;base64,{img_b64}",
+                                "detail": "high",
+                            }},
+                        ],
+                    }],
+                    "max_tokens": 2000,
+                    "temperature": 0,
+                },
+                timeout=60,
+            )
+            resp.raise_for_status()
+            content = resp.json()["choices"][0]["message"]["content"]
 
-    except Exception as e:
-        log.error(f"LLM 分析失败: {e}")
-        return {"flights": [], "lowest_price": None, "error": str(e)}
+            json_match = re.search(r"\{[\s\S]*\}", content)
+            if json_match:
+                data = json.loads(json_match.group())
+                # 价格校验：换算后 CNY 单程 200-8000 合理
+                valid_flights = []
+                for f in data.get("flights", []):
+                    price = f.get("price_cny")
+                    if price and 200 <= price <= 8000:
+                        valid_flights.append(f)
+                    elif price:
+                        log.warning(f"  过滤异常价格: ¥{price} ({f.get('airline', '')})")
+                data["flights"] = valid_flights
+                data["lowest_price"] = min((f["price_cny"] for f in valid_flights), default=None)
+                return data
+            else:
+                return {"flights": [], "lowest_price": None, "error": f"LLM返回非JSON: {content[:200]}"}
+
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait = (attempt + 1) * 5
+                log.warning(f"  LLM 第{attempt+1}次失败，{wait}s 后重试: {e}")
+                time.sleep(wait)
+            else:
+                log.error(f"LLM 分析失败（{max_retries}次重试后）: {e}")
+                return {"flights": [], "lowest_price": None, "error": str(e)}
+
+    return {"flights": [], "lowest_price": None, "error": "未知错误"}
 
 
 def analyze_all_screenshots(screenshots):
