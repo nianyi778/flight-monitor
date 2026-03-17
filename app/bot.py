@@ -197,28 +197,46 @@ def _handle_trips():
 
 
 def _handle_trip_add(text):
+    # /trip add 去程 回程 [预算] [去HH-HH] [回HH-HH]
     parts = text.split()
     if len(parts) < 4:
         tg_send(
             "✈️ *添加行程*\n\n"
-            "格式: `/trip add 去程 回程 预算`\n\n"
+            "格式: `/trip add 去程 回程 [预算] [去H-H] [回H-H]`\n\n"
             "例:\n"
+            "`/trip add 2026-09-18 2026-09-27 1500 去19-23 回0-6`\n"
             "`/trip add 2026-09-18 2026-09-27 1500`\n"
-            "`/trip add 2026-12-28 2027-01-05`  (默认¥1500)"
+            "`/trip add 2026-12-28 2027-01-05`  (默认¥1500 去19-23 回0-6)"
         )
         return
 
     try:
         ob_d, rt_d = parts[2], parts[3]
-        bgt = int(parts[4]) if len(parts) > 4 else 1500
         datetime.strptime(ob_d, "%Y-%m-%d")
         datetime.strptime(rt_d, "%Y-%m-%d")
+
+        # 解析可选参数（预算、时间窗口，顺序灵活）
+        bgt = 1500
+        ob_start, ob_end = 19, 23
+        rt_start, rt_end = 0, 6
+
+        for p in parts[4:]:
+            if p.startswith("去"):
+                s, e = [int(x) for x in p.replace("去", "").split("-")]
+                ob_start, ob_end = s, e
+            elif p.startswith("回"):
+                s, e = [int(x) for x in p.replace("回", "").split("-")]
+                rt_start, rt_end = s, e
+            elif p.isdigit():
+                bgt = int(p)
 
         db = get_db()
         c = db.cursor()
         c.execute(
-            "INSERT INTO trips (outbound_date, return_date, budget) VALUES (%s, %s, %s)",
-            (ob_d, rt_d, bgt)
+            "INSERT INTO trips (outbound_date, return_date, budget, "
+            "outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (ob_d, rt_d, bgt, ob_start, ob_end, rt_start, rt_end)
         )
         db.commit()
         new_id = c.lastrowid
@@ -230,8 +248,8 @@ def _handle_trip_add(text):
             f"🆔 #{new_id}  {countdown}\n"
             f"📅 {ob_d} → {rt_d}\n"
             f"💰 ¥{bgt:,}(CNY)\n"
-            f"🛫 去程: 19:00-23:00\n"
-            f"🛬 回程: 00:00-06:00",
+            f"🛫 去程出发: {ob_start}:00-{ob_end}:00\n"
+            f"🛬 回程到达: {rt_start}:00-{rt_end}:00",
             [
                 [{"text": "⏰ 调整时间", "callback_data": f"trip_time_guide_{new_id}"},
                  {"text": "💰 调整预算", "callback_data": f"trip_budget_guide_{new_id}"}],
@@ -239,7 +257,7 @@ def _handle_trip_add(text):
             ]
         )
     except ValueError:
-        tg_send("❌ 格式错误，日期请用 YYYY-MM-DD，预算为数字")
+        tg_send("❌ 格式错误\n日期: YYYY-MM-DD  预算: 数字  时间: 去H-H 回H-H")
     except Exception as e:
         tg_send(f"❌ 添加失败: {e}")
 
