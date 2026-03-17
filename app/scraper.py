@@ -8,7 +8,7 @@ import random
 from playwright.async_api import async_playwright
 from playwright_stealth import stealth_async
 
-from app.config import SCREENSHOT_DIR, BROWSER_PROFILE, now_jst, log
+from app.config import SCREENSHOT_DIR, BROWSER_PROFILE, PROXY_URL, now_jst, log
 from app.matcher import get_search_urls
 
 
@@ -74,7 +74,7 @@ async def capture_screenshots(trip):
             ua = random.choice(_UA_POOL)
             viewport = random.choice(_VIEWPORT_POOL)
 
-            context = await p.chromium.launch_persistent_context(
+            launch_opts = dict(
                 user_data_dir=str(BROWSER_PROFILE),
                 headless=True,
                 viewport=viewport,
@@ -94,6 +94,13 @@ async def capture_screenshots(trip):
                 ],
                 ignore_default_args=["--enable-automation"],
             )
+
+            # 住宅代理
+            if PROXY_URL:
+                launch_opts["proxy"] = {"server": PROXY_URL}
+                log.info(f"🏠 使用住宅代理: {PROXY_URL.split('@')[-1] if '@' in PROXY_URL else PROXY_URL}")
+
+            context = await p.chromium.launch_persistent_context(**launch_opts)
 
             for idx, search in enumerate(search_urls):
                 if shutdown_event.is_set():

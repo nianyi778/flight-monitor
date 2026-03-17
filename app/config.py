@@ -30,6 +30,9 @@ CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL") or "3600")
 PUSH_INTERVAL = int(os.getenv("PUSH_INTERVAL") or "60")
 ACK_KEYWORD = "确认收到"
 
+# 住宅代理（可选，格式: socks5://user:pass@host:port 或 http://host:port）
+PROXY_URL = os.getenv("PROXY_URL", "")
+
 # TiDB 数据库
 DB_HOST = os.getenv("DB_HOST", "")
 DB_PORT = int(os.getenv("DB_PORT") or "4000")
