@@ -17,7 +17,7 @@ from app.db import (
 from app.scraper import capture_screenshots
 from app.analyzer import analyze_all_screenshots
 from app.matcher import find_best_combinations
-from app.notifier import tg_send, tg_check_ack, format_alert_message, _brief_price
+from app.notifier import tg_send, format_alert_message, _brief_price
 from app.bot import setup_tg_commands, tg_command_listener, force_check_event
 
 
@@ -31,19 +31,25 @@ def handle_signal(sig, frame):
 
 
 async def push_until_ack(msg):
-    """每分钟推送直到确认"""
+    """每分钟推送直到确认（通过 bot listener 的 ack_received_event）"""
+    from app.bot import ack_received_event
+
+    ack_received_event.clear()
     push_count = 1
     state = load_state()
 
     while not shutdown_event.is_set():
-        await asyncio.sleep(PUSH_INTERVAL)
-
-        if tg_check_ack():
+        # 等待 PUSH_INTERVAL 秒，期间如果收到确认立即停止
+        try:
+            await asyncio.wait_for(ack_received_event.wait(), timeout=PUSH_INTERVAL)
+            # event 被 set 了 = 收到确认
             log.info("✅ 收到确认回复，停止推送")
             state["pending_ack"] = False
             save_state(state)
             tg_send("✅ 已确认收到，停止推送。")
-            break
+            return
+        except asyncio.TimeoutError:
+            pass
 
         push_count += 1
         log.info(f"📢 第 {push_count} 次推送...")
@@ -192,14 +198,10 @@ async def main():
         f"/trip del 编号 - 删除行程"
     )
 
-    # 首次检查是否有未确认的通知
+    # 首次检查是否有未确认的通知（重启后继续推送）
     if state.get("pending_ack") and state.get("last_alert_msg"):
         log.info("发现未确认的通知，继续推送...")
-        if tg_check_ack():
-            state["pending_ack"] = False
-            save_state(state)
-        else:
-            await push_until_ack(state["last_alert_msg"])
+        await push_until_ack(state["last_alert_msg"])
 
     # 启动 TG 命令监听（后台）
     tg_listener_task = asyncio.create_task(tg_command_listener())

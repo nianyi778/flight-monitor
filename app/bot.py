@@ -19,6 +19,8 @@ from app.notifier import tg_send
 
 # 用于 /check 命令触发立即检查
 force_check_event = asyncio.Event()
+# 用于"确认收到"停止推送
+ack_received_event = asyncio.Event()
 # 标记是否正在查价中
 checking_in_progress = False
 
@@ -816,7 +818,8 @@ async def tg_command_listener():
                 elif text == "/help":
                     _handle_help()
                 elif ACK_KEYWORD in text:
-                    pass
+                    ack_received_event.set()
+                    log.info("📨 收到确认回复（via bot listener）")
 
             state = load_state()
             state["last_tg_update_id"] = last_update_id
