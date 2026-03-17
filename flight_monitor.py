@@ -661,30 +661,52 @@ async def run_check():
     msg = format_alert_message(combos, results)
     log.info(f"\n{msg}")
 
-    # 判断是否需要通知
+    # 判断通知级别
     state = load_state()
     best_total = combos[0]["total"] if combos else None
     prev_best = state.get("best_price")
-
-    should_notify = False
-    if best_total and best_total <= BUDGET_TOTAL:
-        should_notify = True
-        log.info(f"🎉 发现低于预算的价格: ¥{best_total}")
-    elif best_total and (prev_best is None or best_total < prev_best * 0.95):
-        should_notify = True
-        log.info(f"📉 价格下降: ¥{prev_best} → ¥{best_total}")
+    check_count = state.get("check_count", 0) + 1
+    state["check_count"] = check_count
 
     if best_total:
         state["best_price"] = min(best_total, prev_best or 99999)
-        save_state(state)
 
-    if should_notify:
+    hit_budget = best_total and best_total <= BUDGET_TOTAL
+    price_dropped = best_total and prev_best and best_total < prev_best * 0.95
+
+    if hit_budget or price_dropped:
+        # 🎉 好价！详细通知 + 持续推送
+        if hit_budget:
+            log.info(f"🎉 发现低于预算的价格: ¥{best_total}")
+        else:
+            log.info(f"📉 价格下降: ¥{prev_best} → ¥{best_total}")
         tg_send(msg)
         state["pending_ack"] = True
         state["last_alert_msg"] = msg
         state["last_alert_time"] = datetime.now().isoformat()
         save_state(state)
         await push_until_ack(msg)
+    else:
+        # 📋 常规简报（让用户感知系统在工作）
+        save_state(state)
+        ts = datetime.now().strftime("%H:%M")
+        diff = f"¥{best_total - BUDGET_TOTAL}" if best_total else "?"
+        trend = ""
+        if prev_best and best_total:
+            if best_total < prev_best:
+                trend = f" 📉↓¥{prev_best - best_total}"
+            elif best_total > prev_best:
+                trend = f" 📈↑¥{best_total - prev_best}"
+            else:
+                trend = " ➡️持平"
+
+        brief = (
+            f"🕐 *{ts} 巡查报告* (第{check_count}次)\n"
+            f"当前最低往返: ¥{best_total or '?'}{trend}\n"
+            f"距预算还差: {diff}\n"
+            f"历史最低: ¥{state.get('best_price', '?')}"
+        )
+        tg_send(brief)
 
     return results, combos
 

@@ -1,15 +1,28 @@
 services:
   flight-monitor:
-    image: ghcr.io/${GITHUB_OWNER:-your-username}/flight-monitor:latest
+    build: .
     container_name: flight-monitor
     restart: unless-stopped
-    env_file: .env
+    environment:
+      - LLM_BASE_URL=${LLM_BASE_URL}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o}
+      - TG_BOT_TOKEN=${TG_BOT_TOKEN}
+      - TG_CHAT_ID=${TG_CHAT_ID}
+      - OUTBOUND_DATE=${OUTBOUND_DATE:-2026-09-18}
+      - RETURN_DATE=${RETURN_DATE:-2026-09-27}
+      - BUDGET_TOTAL=${BUDGET_TOTAL:-1500}
+      - OUTBOUND_DEPART_AFTER=${OUTBOUND_DEPART_AFTER:-19}
+      - RETURN_ARRIVE_BEFORE=${RETURN_ARRIVE_BEFORE:-6}
+      - CHECK_INTERVAL=${CHECK_INTERVAL:-3600}
+      - PUSH_INTERVAL=${PUSH_INTERVAL:-60}
     volumes:
       - flight-data:/app/data
     deploy:
       resources:
         limits:
           memory: 2G
+    shm_size: "1gb"
 
 volumes:
   flight-data:
