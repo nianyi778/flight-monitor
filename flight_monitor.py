@@ -16,6 +16,7 @@ import os
 import random
 import re
 import signal
+import sqlite3
 import sys
 import time
 from datetime import datetime
@@ -44,6 +45,13 @@ RETURN_ARRIVE_BEFORE = int(os.getenv("RETURN_ARRIVE_BEFORE", "6"))
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "3600"))
 PUSH_INTERVAL = int(os.getenv("PUSH_INTERVAL", "60"))
 ACK_KEYWORD = "确认收到"
+
+# TiDB 数据库
+DB_HOST = os.getenv("DB_HOST", "gateway01.ap-northeast-1.prod.aws.tidbcloud.com")
+DB_PORT = int(os.getenv("DB_PORT", "4000"))
+DB_USER = os.getenv("DB_USER", "3gWwwioQDxy2qj6.root")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "Er77WVoCjAKNVxQz")
+DB_NAME = os.getenv("DB_NAME", "test")
 
 # 数据持久化目录（Docker volume 挂载点）
 DATA_DIR = Path("/app/data")
@@ -596,22 +604,28 @@ async def tg_command_listener():
                     )
 
                 elif text == "/history":
-                    # 读取最近10条价格记录
-                    history_lines = []
-                    if PRICE_LOG.exists():
-                        lines = PRICE_LOG.read_text().strip().split("\n")
-                        for line in lines[-10:]:
-                            try:
-                                entry = json.loads(line)
-                                ts = entry["timestamp"][5:16].replace("T", " ")
-                                total = entry.get("best_total", "?")
-                                history_lines.append(f"  {ts} → ¥{total}")
-                            except:
-                                continue
-                    if history_lines:
-                        tg_send(f"📈 *价格趋势* (最近{len(history_lines)}次)\n\n" + "\n".join(history_lines))
-                    else:
-                        tg_send("📈 暂无历史数据")
+                    try:
+                        db = get_db()
+                        c = db.cursor()
+                        c.execute(
+                            "SELECT check_time, best_total, outbound_lowest, return_lowest "
+                            "FROM check_summary ORDER BY check_time DESC LIMIT 10"
+                        )
+                        rows = c.fetchall()
+                        db.close()
+                        if rows:
+                            lines_h = []
+                            for r in reversed(rows):
+                                ts = r[0].strftime("%m-%d %H:%M")
+                                total = r[1] or "?"
+                                ob = r[2] or "?"
+                                rt = r[3] or "?"
+                                lines_h.append(f"  {ts} | 往返¥{total} (去¥{ob}+回¥{rt})")
+                            tg_send(f"📈 *价格趋势* (最近{len(lines_h)}次)\n\n" + "\n".join(lines_h))
+                        else:
+                            tg_send("📈 暂无历史数据")
+                    except Exception as e:
+                        tg_send(f"📈 查询失败: {e}")
 
                 elif text == "/budget":
                     tg_send(
@@ -707,20 +721,72 @@ def save_state(state):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2))
 
-def log_prices(results, combos):
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    entry = {
-        "timestamp": datetime.now().isoformat(),
-        "best_total": combos[0]["total"] if combos else None,
-        "outbound_lowest": min(
-            (s.get("lowest_price") or 99999 for s in results["outbound"]), default=None
-        ),
-        "return_lowest": min(
-            (s.get("lowest_price") or 99999 for s in results["return"]), default=None
-        ),
-    }
-    with open(PRICE_LOG, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+def get_db():
+    """获取 TiDB 数据库连接"""
+    import pymysql
+    return pymysql.connect(
+        host=DB_HOST, port=DB_PORT, user=DB_USER,
+        password=DB_PASSWORD, database=DB_NAME,
+        ssl={"ca": None}, ssl_verify_cert=False,
+        ssl_verify_identity=False, charset="utf8mb4",
+    )
+
+
+def save_to_db(results, combos):
+    """将所有航班数据和巡查汇总写入 TiDB"""
+    now = datetime.now()
+
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+
+        # 写入每条航班记录
+        flights_count = 0
+        for direction in ["outbound", "return"]:
+            flight_date = OUTBOUND_DATE if direction == "outbound" else RETURN_DATE
+            for src in results[direction]:
+                for f in src.get("flights", []):
+                    cur.execute(
+                        """INSERT INTO flight_prices
+                        (check_time, direction, source, airline, flight_no,
+                         departure_time, arrival_time, origin, destination,
+                         price_cny, original_price, original_currency, stops, flight_date)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        (now, direction, src.get("source", ""),
+                         f.get("airline", ""), f.get("flight_no", ""),
+                         f.get("departure_time", ""), f.get("arrival_time", ""),
+                         f.get("origin", ""), f.get("destination", ""),
+                         f.get("price_cny"), f.get("original_price"),
+                         f.get("original_currency", "CNY"), f.get("stops", 0),
+                         flight_date)
+                    )
+                    flights_count += 1
+
+        # 写入巡查汇总
+        best = combos[0] if combos else {}
+        ob_lowest = min((s.get("lowest_price") or 99999 for s in results["outbound"]), default=None)
+        rt_lowest = min((s.get("lowest_price") or 99999 for s in results["return"]), default=None)
+
+        cur.execute(
+            """INSERT INTO check_summary
+            (check_time, best_total, outbound_lowest, return_lowest,
+             best_outbound_airline, best_return_airline, flights_found)
+            VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+            (now,
+             best.get("total"),
+             ob_lowest if ob_lowest != 99999 else None,
+             rt_lowest if rt_lowest != 99999 else None,
+             best.get("outbound", {}).get("airline", ""),
+             best.get("return", {}).get("airline", ""),
+             flights_count)
+        )
+
+        conn.commit()
+        conn.close()
+        log.info(f"💾 已入库: {flights_count} 条航班 + 1 条汇总")
+
+    except Exception as e:
+        log.error(f"数据库写入失败: {e}")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -767,7 +833,7 @@ async def run_check():
 
     results = analyze_all_screenshots(screenshots)
     combos = find_best_combinations(results)
-    log_prices(results, combos)
+    save_to_db(results, combos)
 
     msg = format_alert_message(combos, results)
     log.info(f"\n{msg}")
