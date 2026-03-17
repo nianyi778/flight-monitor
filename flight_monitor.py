@@ -29,18 +29,12 @@ from playwright.async_api import async_playwright
 # 配置（全部从环境变量读取）
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://sub2api.nianyi.dpdns.org/v1")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
 
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID", "")
-
-OUTBOUND_DATE = os.getenv("OUTBOUND_DATE", "2026-09-18")
-RETURN_DATE = os.getenv("RETURN_DATE", "2026-09-27")
-BUDGET_TOTAL = int(os.getenv("BUDGET_TOTAL", "1500"))
-OUTBOUND_DEPART_AFTER = int(os.getenv("OUTBOUND_DEPART_AFTER", "19"))
-RETURN_ARRIVE_BEFORE = int(os.getenv("RETURN_ARRIVE_BEFORE", "6"))
 
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "3600"))
 PUSH_INTERVAL = int(os.getenv("PUSH_INTERVAL", "60"))
@@ -161,16 +155,47 @@ HTMLCanvasElement.prototype.toDataURL = function(type) {
 # 搜索 URL
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def get_search_urls():
-    """
-    搜索策略：
-    - 携程(NRT/HND)：中国主力平台，利用赴日旅游定价优势
-    - Google CN/JP：聚合比价，中日站交叉对比
-    覆盖航司：春秋(9C/IJ)、捷星(GK)、乐桃(MM)、ZIPAIR(ZG)、
-             东航(MU)、吉祥(HO)、国航(CA)、ANA(NH)、JAL(JL)
-    """
-    OB = OUTBOUND_DATE
-    RT = RETURN_DATE
+def get_active_trips():
+    """从数据库读取所有 active 行程"""
+    try:
+        db = get_db()
+        cur = db.cursor()
+        cur.execute(
+            "SELECT id, outbound_date, return_date, budget, best_price, "
+            "outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end "
+            "FROM trips WHERE status='active'"
+        )
+        rows = cur.fetchall()
+        db.close()
+        return [
+            {"id": r[0], "outbound_date": str(r[1]), "return_date": str(r[2]),
+             "budget": r[3], "best_price": r[4],
+             "depart_after": r[5] or 19, "depart_before": r[6] or 23,
+             "arrive_after": r[7] or 0, "arrive_before": r[8] or 6}
+            for r in rows
+        ]
+    except Exception as e:
+        log.error(f"读取行程失败: {e}")
+        return []
+
+
+def update_trip_best_price(trip_id, best_price):
+    """更新行程历史最低价"""
+    try:
+        db = get_db()
+        cur = db.cursor()
+        cur.execute("UPDATE trips SET best_price = LEAST(COALESCE(best_price, 99999), %s) WHERE id = %s",
+                    (best_price, trip_id))
+        db.commit()
+        db.close()
+    except Exception as e:
+        log.error(f"更新行程最低价失败: {e}")
+
+
+def get_search_urls(trip):
+    """根据行程生成搜索 URL"""
+    OB = trip["outbound_date"]
+    RT = trip["return_date"]
 
     return [
         # ━━━ 携程（最稳定，CNY）━━━
@@ -208,7 +233,7 @@ def get_search_urls():
 # 截图抓取
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-async def capture_screenshots():
+async def capture_screenshots(trip):
     """用 Playwright + 持久化指纹抓取所有平台截图"""
     SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
     BROWSER_PROFILE.mkdir(parents=True, exist_ok=True)
@@ -245,7 +270,7 @@ async def capture_screenshots():
 
             await context.add_init_script(STEALTH_JS)
 
-            for idx, search in enumerate(get_search_urls()):
+            for idx, search in enumerate(get_search_urls(trip)):
                 if shutdown_event.is_set():
                     break
 
@@ -433,14 +458,17 @@ def analyze_all_screenshots(screenshots):
 # 价格分析
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def find_best_combinations(results):
+def find_best_combinations(results, trip):
     """找出符合条件的最优往返组合"""
+    depart_after = trip.get("depart_after", 19)
+    budget = trip.get("budget", 1500)
+
     outbound_flights = []
     for src in results["outbound"]:
         for f in src.get("flights", []):
             try:
                 dep_hour = int(f["departure_time"].split(":")[0])
-                if dep_hour >= OUTBOUND_DEPART_AFTER:
+                if dep_hour >= depart_after:
                     f["_source"] = src["source"]
                     f["_url"] = src["url"]
                     outbound_flights.append(f)
@@ -465,7 +493,7 @@ def find_best_combinations(results):
                 "outbound": ob,
                 "return": rt,
                 "total": total,
-                "within_budget": total <= BUDGET_TOTAL,
+                "within_budget": total <= budget,
             })
 
     combos.sort(key=lambda x: x["total"])
@@ -546,7 +574,7 @@ def setup_tg_commands():
                 {"command": "check", "description": "立即查价"},
                 {"command": "status", "description": "系统状态"},
                 {"command": "history", "description": "价格趋势"},
-                {"command": "budget", "description": "查看预算"},
+                {"command": "trips", "description": "查看所有行程"},
             ]},
             timeout=10,
         )
@@ -627,13 +655,87 @@ async def tg_command_listener():
                     except Exception as e:
                         tg_send(f"📈 查询失败: {e}")
 
-                elif text == "/budget":
-                    tg_send(
-                        f"💰 *预算信息*\n\n"
-                        f"当前预算: ¥{BUDGET_TOTAL} 往返\n"
-                        f"去程: {OUTBOUND_DATE} 东京→上海 ({OUTBOUND_DEPART_AFTER}:00后)\n"
-                        f"回程: {RETURN_DATE} 上海→东京"
-                    )
+                elif text == "/budget" or text == "/trip list" or text == "/trips":
+                    trips = get_active_trips()
+                    if trips:
+                        lines_t = ["📋 *监控中的行程*\n"]
+                        for t in trips:
+                            lines_t.append(
+                                f"*#{t['id']}* {t['outbound_date']} → {t['return_date']}\n"
+                                f"  预算: ¥{t['budget']}(CNY) | 去程: {t['depart_after']}:00-{t['depart_before']}:00\n"
+                                f"  回程到达: {t['arrive_after']}:00-{t['arrive_before']}:00\n"
+                                f"  历史最低: ¥{t['best_price'] or '暂无'}"
+                            )
+                        lines_t.append(f"\n💡 /trip add 去程 回程 预算")
+                        lines_t.append(f"💡 /trip del 编号")
+                        tg_send("\n".join(lines_t))
+                    else:
+                        tg_send("📋 暂无监控行程\n\n用 /trip add 2026-09-18 2026-09-27 1500 添加")
+
+                elif text.startswith("/trip add"):
+                    # /trip add 2026-09-18 2026-09-27 1500
+                    parts = text.split()
+                    if len(parts) >= 4:
+                        try:
+                            ob_d = parts[2]
+                            rt_d = parts[3]
+                            bgt = int(parts[4]) if len(parts) > 4 else 1500
+                            db = get_db()
+                            c = db.cursor()
+                            c.execute(
+                                "INSERT INTO trips (outbound_date, return_date, budget) VALUES (%s, %s, %s)",
+                                (ob_d, rt_d, bgt)
+                            )
+                            db.commit()
+                            new_id = c.lastrowid
+                            db.close()
+                            tg_send(f"✅ 行程#{new_id} 已添加\n{ob_d} → {rt_d} 预算¥{bgt}(CNY)")
+                        except Exception as e:
+                            tg_send(f"❌ 添加失败: {e}")
+                    else:
+                        tg_send("格式: /trip add 去程日期 回程日期 预算\n例: /trip add 2026-12-28 2027-01-05 2000")
+
+                elif text.startswith("/trip del"):
+                    parts = text.split()
+                    if len(parts) >= 3:
+                        try:
+                            tid = int(parts[2])
+                            db = get_db()
+                            c = db.cursor()
+                            c.execute("UPDATE trips SET status='deleted' WHERE id=%s", (tid,))
+                            db.commit()
+                            db.close()
+                            tg_send(f"🗑 行程#{tid} 已删除")
+                        except Exception as e:
+                            tg_send(f"❌ 删除失败: {e}")
+
+                elif text.startswith("/trip pause"):
+                    parts = text.split()
+                    if len(parts) >= 3:
+                        try:
+                            tid = int(parts[2])
+                            db = get_db()
+                            c = db.cursor()
+                            c.execute("UPDATE trips SET status='paused' WHERE id=%s", (tid,))
+                            db.commit()
+                            db.close()
+                            tg_send(f"⏸ 行程#{tid} 已暂停")
+                        except Exception as e:
+                            tg_send(f"❌ 暂停失败: {e}")
+
+                elif text.startswith("/trip resume"):
+                    parts = text.split()
+                    if len(parts) >= 3:
+                        try:
+                            tid = int(parts[2])
+                            db = get_db()
+                            c = db.cursor()
+                            c.execute("UPDATE trips SET status='active' WHERE id=%s", (tid,))
+                            db.commit()
+                            db.close()
+                            tg_send(f"▶️ 行程#{tid} 已恢复")
+                        except Exception as e:
+                            tg_send(f"❌ 恢复失败: {e}")
 
                 elif ACK_KEYWORD in text:
                     pass  # tg_check_ack 会处理
@@ -652,12 +754,17 @@ async def tg_command_listener():
         await asyncio.sleep(1)
 
 
-def format_alert_message(combos, results):
+def format_alert_message(combos, results, trip=None):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-    lines = [f"✈️ *机票价格更新* ({ts})\n"]
-    lines.append(f"📅 去程: {OUTBOUND_DATE} 东京→上海")
-    lines.append(f"📅 回程: {RETURN_DATE} 上海→东京")
-    lines.append(f"💰 预算: ¥{BUDGET_TOTAL} 往返\n")
+    ob_date = trip["outbound_date"] if trip else "?"
+    rt_date = trip["return_date"] if trip else "?"
+    budget = trip["budget"] if trip else 1500
+    trip_id = trip["id"] if trip else "?"
+
+    lines = [f"✈️ *机票价格更新* ({ts}) 行程#{trip_id}\n"]
+    lines.append(f"📅 去程: {ob_date} 东京→上海")
+    lines.append(f"📅 回程: {rt_date} 上海→东京")
+    lines.append(f"💰 预算: ¥{budget}(CNY) 往返\n")
 
     if combos:
         best = combos[0]
@@ -732,9 +839,10 @@ def get_db():
     )
 
 
-def save_to_db(results, combos):
+def save_to_db(results, combos, trip):
     """将所有航班数据和巡查汇总写入 TiDB"""
     now = datetime.now()
+    trip_id = trip["id"]
 
     try:
         conn = get_db()
@@ -743,16 +851,16 @@ def save_to_db(results, combos):
         # 写入每条航班记录
         flights_count = 0
         for direction in ["outbound", "return"]:
-            flight_date = OUTBOUND_DATE if direction == "outbound" else RETURN_DATE
+            flight_date = trip["outbound_date"] if direction == "outbound" else trip["return_date"]
             for src in results[direction]:
                 for f in src.get("flights", []):
                     cur.execute(
                         """INSERT INTO flight_prices
-                        (check_time, direction, source, airline, flight_no,
+                        (trip_id, check_time, direction, source, airline, flight_no,
                          departure_time, arrival_time, origin, destination,
                          price_cny, original_price, original_currency, stops, flight_date)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                        (now, direction, src.get("source", ""),
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        (trip_id, now, direction, src.get("source", ""),
                          f.get("airline", ""), f.get("flight_no", ""),
                          f.get("departure_time", ""), f.get("arrival_time", ""),
                          f.get("origin", ""), f.get("destination", ""),
@@ -769,10 +877,10 @@ def save_to_db(results, combos):
 
         cur.execute(
             """INSERT INTO check_summary
-            (check_time, best_total, outbound_lowest, return_lowest,
+            (trip_id, check_time, best_total, outbound_lowest, return_lowest,
              best_outbound_airline, best_return_airline, flights_found)
-            VALUES (%s,%s,%s,%s,%s,%s,%s)""",
-            (now,
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (trip_id, now,
              best.get("total"),
              ob_lowest if ob_lowest != 99999 else None,
              rt_lowest if rt_lowest != 99999 else None,
@@ -820,72 +928,76 @@ async def push_until_ack(msg):
 
 
 async def run_check():
-    """执行一次完整的价格检查"""
-    log.info("=" * 50)
-    log.info("✈️ 开始机票价格检查")
+    """执行一次完整的价格检查（遍历所有 active 行程）"""
+    trips = get_active_trips()
+    if not trips:
+        log.warning("没有 active 行程，跳过检查")
+        return
 
-    screenshots = await capture_screenshots()
-    if not screenshots:
-        log.error("未获取到任何截图")
-        return None, None
-
-    log.info(f"获取到 {len(screenshots)} 张截图")
-
-    results = analyze_all_screenshots(screenshots)
-    combos = find_best_combinations(results)
-    save_to_db(results, combos)
-
-    msg = format_alert_message(combos, results)
-    log.info(f"\n{msg}")
-
-    # 判断通知级别
     state = load_state()
-    best_total = combos[0]["total"] if combos else None
-    prev_best = state.get("best_price")
     check_count = state.get("check_count", 0) + 1
     state["check_count"] = check_count
+    save_state(state)
 
-    if best_total:
-        state["best_price"] = min(best_total, prev_best or 99999)
+    brief_lines = [f"🕐 *{datetime.now().strftime('%H:%M')} 巡查报告* (第{check_count}次)\n"]
 
-    hit_budget = best_total and best_total <= BUDGET_TOTAL
-    price_dropped = best_total and prev_best and best_total < prev_best * 0.95
+    for trip in trips:
+        log.info("=" * 50)
+        log.info(f"✈️ 检查行程#{trip['id']}: {trip['outbound_date']} → {trip['return_date']} (预算¥{trip['budget']})")
 
-    if hit_budget or price_dropped:
-        # 🎉 好价！详细通知 + 持续推送
-        if hit_budget:
-            log.info(f"🎉 发现低于预算的价格: ¥{best_total}")
+        screenshots = await capture_screenshots(trip)
+        if not screenshots:
+            log.error(f"行程#{trip['id']} 未获取到截图")
+            brief_lines.append(f"❌ 行程#{trip['id']} 抓取失败")
+            continue
+
+        results = analyze_all_screenshots(screenshots)
+        combos = find_best_combinations(results, trip)
+        save_to_db(results, combos, trip)
+
+        best_total = combos[0]["total"] if combos else None
+        prev_best = trip.get("best_price")
+        budget = trip["budget"]
+
+        # 更新历史最低
+        if best_total:
+            update_trip_best_price(trip["id"], best_total)
+
+        hit_budget = best_total and best_total <= budget
+        price_dropped = best_total and prev_best and best_total < prev_best * 0.95
+
+        if hit_budget or price_dropped:
+            msg = format_alert_message(combos, results, trip)
+            log.info(f"\n{msg}")
+            tg_send(msg)
+            s = load_state()
+            s["pending_ack"] = True
+            s["last_alert_msg"] = msg
+            save_state(s)
+            await push_until_ack(msg)
         else:
-            log.info(f"📉 价格下降: ¥{prev_best} → ¥{best_total}")
-        tg_send(msg)
-        state["pending_ack"] = True
-        state["last_alert_msg"] = msg
-        state["last_alert_time"] = datetime.now().isoformat()
-        save_state(state)
-        await push_until_ack(msg)
-    else:
-        # 📋 常规简报（让用户感知系统在工作）
-        save_state(state)
-        ts = datetime.now().strftime("%H:%M")
-        diff = f"¥{best_total - BUDGET_TOTAL}" if best_total else "?"
-        trend = ""
-        if prev_best and best_total:
-            if best_total < prev_best:
-                trend = f" 📉↓¥{prev_best - best_total}"
-            elif best_total > prev_best:
-                trend = f" 📈↑¥{best_total - prev_best}"
-            else:
-                trend = " ➡️持平"
+            # 简报
+            trend = ""
+            if prev_best and best_total:
+                if best_total < prev_best:
+                    trend = f" 📉↓¥{prev_best - best_total}"
+                elif best_total > prev_best:
+                    trend = f" 📈↑¥{best_total - prev_best}"
+                else:
+                    trend = " ➡️持平"
 
-        brief = (
-            f"🕐 *{ts} 巡查报告* (第{check_count}次)\n"
-            f"当前最低往返: ¥{best_total or '?'}{trend}\n"
-            f"距预算还差: {diff}\n"
-            f"历史最低: ¥{state.get('best_price', '?')}"
-        )
-        tg_send(brief)
+            diff = f"¥{best_total - budget}" if best_total else "?"
+            new_best = min(best_total or 99999, prev_best or 99999)
+            brief_lines.append(
+                f"✈️ *#{trip['id']}* {trip['outbound_date']}→{trip['return_date']}\n"
+                f"  最低往返: ¥{best_total or '?'}{trend} | 差预算: {diff}\n"
+                f"  历史最低: ¥{new_best if new_best < 99999 else '?'}"
+            )
 
-    return results, combos
+    # 发送汇总简报（没有触发好价推送时）
+    state = load_state()
+    if not state.get("pending_ack") and len(brief_lines) > 1:
+        tg_send("\n\n".join(brief_lines))
 
 
 async def main():
@@ -921,15 +1033,15 @@ async def main():
     save_state(state)
     tg_send(
         f"🟢 *机票监控系统已上线* (第{boot_count}次启动)\n\n"
-        f"📅 去程: {OUTBOUND_DATE} 东京→上海\n"
-        f"📅 回程: {RETURN_DATE} 上海→东京\n"
-        f"💰 预算: ¥{BUDGET_TOTAL} 往返\n"
-        f"⏰ 每 {CHECK_INTERVAL//60} 分钟巡查一次\n\n"
+        f"📊 监控行程: {len(get_active_trips())} 个\n"
+        f"⏰ 约每 {CHECK_INTERVAL//60} 分钟巡查（随机抖动防检测）\n\n"
         f"💡 可用命令:\n"
         f"/check - 立即查价\n"
         f"/status - 系统状态\n"
         f"/history - 价格趋势\n"
-        f"/budget - 查看/修改预算"
+        f"/trips - 查看所有行程\n"
+        f"/trip add 去程 回程 预算 - 添加行程\n"
+        f"/trip del 编号 - 删除行程"
     )
 
     # 首次检查是否有未确认的通知
@@ -953,12 +1065,15 @@ async def main():
             tg_send(f"⚠️ 机票监控异常: {e}")
 
         # 等待下一次检查（可被 shutdown 或 /check 命令中断）
-        log.info(f"⏰ 下次检查: {CHECK_INTERVAL}s 后")
+        # 随机间隔：CHECK_INTERVAL ± 30%，防止被目标站点识别为定时爬虫
+        jitter = random.uniform(0.7, 1.3)
+        wait_time = int(CHECK_INTERVAL * jitter)
+        log.info(f"⏰ 下次检查: {wait_time}s 后 (随机抖动)")
         force_check_event.clear()
         done, _ = await asyncio.wait(
             [asyncio.create_task(shutdown_event.wait()),
              asyncio.create_task(force_check_event.wait())],
-            timeout=CHECK_INTERVAL,
+            timeout=wait_time,
             return_when=asyncio.FIRST_COMPLETED,
         )
         if force_check_event.is_set():
