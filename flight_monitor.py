@@ -527,6 +527,117 @@ def tg_check_ack():
         return False
 
 
+def setup_tg_commands():
+    """注册 TG Bot 菜单命令"""
+    if not TG_BOT_TOKEN:
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TG_BOT_TOKEN}/setMyCommands",
+            json={"commands": [
+                {"command": "check", "description": "立即查价"},
+                {"command": "status", "description": "系统状态"},
+                {"command": "history", "description": "价格趋势"},
+                {"command": "budget", "description": "查看预算"},
+            ]},
+            timeout=10,
+        )
+        log.info("TG 菜单命令已注册")
+    except Exception as e:
+        log.error(f"TG 菜单注册失败: {e}")
+
+
+# 用于 /check 命令触发立即检查
+force_check_event = asyncio.Event()
+
+
+async def tg_command_listener():
+    """后台监听 TG 命令"""
+    state = load_state()
+    last_update_id = state.get("last_tg_update_id", 0)
+
+    while not shutdown_event.is_set():
+        try:
+            resp = requests.get(
+                f"https://api.telegram.org/bot{TG_BOT_TOKEN}/getUpdates",
+                params={"offset": last_update_id + 1, "timeout": 10},
+                timeout=15,
+            )
+            if not resp.ok:
+                await asyncio.sleep(5)
+                continue
+
+            updates = resp.json().get("result", [])
+            for update in updates:
+                last_update_id = update["update_id"]
+                msg = update.get("message", {})
+                text = msg.get("text", "").strip()
+                chat_id = str(msg.get("chat", {}).get("id", ""))
+
+                if chat_id != str(TG_CHAT_ID):
+                    continue
+
+                if text == "/check":
+                    tg_send("🔍 收到！正在立即查价...")
+                    force_check_event.set()
+
+                elif text == "/status":
+                    s = load_state()
+                    uptime_checks = s.get("check_count", 0)
+                    best = s.get("best_price", "?")
+                    boot = s.get("boot_count", 0)
+                    tg_send(
+                        f"📊 *系统状态*\n\n"
+                        f"启动次数: {boot}\n"
+                        f"已巡查: {uptime_checks} 次\n"
+                        f"历史最低: ¥{best}\n"
+                        f"预算: ¥{BUDGET_TOTAL}\n"
+                        f"检查间隔: {CHECK_INTERVAL//60} 分钟"
+                    )
+
+                elif text == "/history":
+                    # 读取最近10条价格记录
+                    history_lines = []
+                    if PRICE_LOG.exists():
+                        lines = PRICE_LOG.read_text().strip().split("\n")
+                        for line in lines[-10:]:
+                            try:
+                                entry = json.loads(line)
+                                ts = entry["timestamp"][5:16].replace("T", " ")
+                                total = entry.get("best_total", "?")
+                                history_lines.append(f"  {ts} → ¥{total}")
+                            except:
+                                continue
+                    if history_lines:
+                        tg_send(f"📈 *价格趋势* (最近{len(history_lines)}次)\n\n" + "\n".join(history_lines))
+                    else:
+                        tg_send("📈 暂无历史数据")
+
+                elif text == "/budget":
+                    tg_send(
+                        f"💰 *预算信息*\n\n"
+                        f"当前预算: ¥{BUDGET_TOTAL} 往返\n"
+                        f"去程: {OUTBOUND_DATE} 东京→上海 ({OUTBOUND_DEPART_AFTER}:00后)\n"
+                        f"回程: {RETURN_DATE} 上海→东京"
+                    )
+
+                elif ACK_KEYWORD in text:
+                    pass  # tg_check_ack 会处理
+
+            # 保存 offset
+            state = load_state()
+            state["last_tg_update_id"] = last_update_id
+            save_state(state)
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            log.error(f"TG 命令监听异常: {e}")
+            await asyncio.sleep(10)
+
+        await asyncio.sleep(1)
+
+
 def format_alert_message(combos, results):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
     lines = [f"✈️ *机票价格更新* ({ts})\n"]
@@ -734,8 +845,28 @@ async def main():
         log.error("❌ LLM_API_KEY 未配置，退出")
         return
 
-    # 首次检查是否有未确认的通知
+    # 设置 TG Bot 菜单命令
+    setup_tg_commands()
+
+    # 🟢 启动打招呼（健康检查）
     state = load_state()
+    boot_count = state.get("boot_count", 0) + 1
+    state["boot_count"] = boot_count
+    save_state(state)
+    tg_send(
+        f"🟢 *机票监控系统已上线* (第{boot_count}次启动)\n\n"
+        f"📅 去程: {OUTBOUND_DATE} 东京→上海\n"
+        f"📅 回程: {RETURN_DATE} 上海→东京\n"
+        f"💰 预算: ¥{BUDGET_TOTAL} 往返\n"
+        f"⏰ 每 {CHECK_INTERVAL//60} 分钟巡查一次\n\n"
+        f"💡 可用命令:\n"
+        f"/check - 立即查价\n"
+        f"/status - 系统状态\n"
+        f"/history - 价格趋势\n"
+        f"/budget - 查看/修改预算"
+    )
+
+    # 首次检查是否有未确认的通知
     if state.get("pending_ack") and state.get("last_alert_msg"):
         log.info("发现未确认的通知，继续推送...")
         if tg_check_ack():
@@ -743,6 +874,9 @@ async def main():
             save_state(state)
         else:
             await push_until_ack(state["last_alert_msg"])
+
+    # 启动 TG 命令监听（后台）
+    tg_listener_task = asyncio.create_task(tg_command_listener())
 
     # 主循环
     while not shutdown_event.is_set():
@@ -752,13 +886,19 @@ async def main():
             log.error(f"检查异常: {e}", exc_info=True)
             tg_send(f"⚠️ 机票监控异常: {e}")
 
-        # 等待下一次检查（可被 shutdown 中断）
+        # 等待下一次检查（可被 shutdown 或 /check 命令中断）
         log.info(f"⏰ 下次检查: {CHECK_INTERVAL}s 后")
-        try:
-            await asyncio.wait_for(shutdown_event.wait(), timeout=CHECK_INTERVAL)
-        except asyncio.TimeoutError:
-            pass
+        force_check_event.clear()
+        done, _ = await asyncio.wait(
+            [asyncio.create_task(shutdown_event.wait()),
+             asyncio.create_task(force_check_event.wait())],
+            timeout=CHECK_INTERVAL,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if force_check_event.is_set():
+            log.info("📢 收到 /check 命令，立即执行检查")
 
+    tg_listener_task.cancel()
     log.info("🛑 监控系统已停止")
 
 
