@@ -183,8 +183,8 @@ def _handle_trips():
     for t in active:
         tid = t["id"]
         buttons.append([
+            {"text": f"✏️ 编辑#{tid}", "callback_data": f"trip_edit_{tid}"},
             {"text": f"⏸ 暂停#{tid}", "callback_data": f"trip_pause_{tid}"},
-            {"text": f"💰 改预算#{tid}", "callback_data": f"trip_budget_guide_{tid}"},
             {"text": f"🗑 删除#{tid}", "callback_data": f"trip_del_confirm_{tid}"},
         ])
     for t in paused:
@@ -586,6 +586,46 @@ def _handle_callback(callback_id, data, message_id):
         except Exception as e:
             tg_answer_callback(callback_id, f"失败: {e}")
 
+    elif data.startswith("trip_edit_"):
+        tid = data.split("_")[-1]
+        tg_answer_callback(callback_id)
+        # 查当前值显示
+        try:
+            db = get_db()
+            c = db.cursor()
+            c.execute("SELECT outbound_date, return_date, budget, outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end FROM trips WHERE id=%s", (tid,))
+            r = c.fetchone()
+            db.close()
+            if r:
+                tg_send_with_buttons(
+                    f"✏️ *编辑行程 #{tid}*\n\n"
+                    f"📅 去程: `{r[0]}`\n"
+                    f"📅 回程: `{r[1]}`\n"
+                    f"💰 预算: `¥{r[2]:,}`\n"
+                    f"🛫 去程出发: `{r[3]}-{r[4]}点`\n"
+                    f"🛬 回程到达: `{r[5]}-{r[6]}点`\n\n"
+                    f"点击要修改的项目：",
+                    [
+                        [{"text": "📅 改日期", "callback_data": f"trip_date_guide_{tid}"},
+                         {"text": "💰 改预算", "callback_data": f"trip_budget_guide_{tid}"}],
+                        [{"text": "⏰ 改时间窗口", "callback_data": f"trip_time_guide_{tid}"},
+                         {"text": "↩️ 返回", "callback_data": "show_trips"}],
+                    ]
+                )
+            else:
+                tg_send(f"❌ 行程 #{tid} 不存在")
+        except Exception as e:
+            tg_send(f"❌ {e}")
+
+    elif data.startswith("trip_date_guide_"):
+        tid = data.split("_")[-1]
+        tg_answer_callback(callback_id)
+        tg_send(
+            f"📅 修改日期，请输入：\n\n"
+            f"`/trip date {tid} 去程日期 回程日期`\n\n"
+            f"例: `/trip date {tid} 2026-09-18 2026-09-28`"
+        )
+
     elif data.startswith("trip_budget_guide_"):
         tid = data.split("_")[-1]
         tg_answer_callback(callback_id)
@@ -728,6 +768,31 @@ async def tg_command_listener():
                             tg_send(f"❌ {e}")
                     else:
                         tg_send("格式: `/trip budget 编号 金额`")
+                elif text.startswith("/trip date"):
+                    parts = text.split()
+                    if len(parts) >= 5:
+                        try:
+                            tid = int(parts[2])
+                            ob_d, rt_d = parts[3], parts[4]
+                            # 校验
+                            ob_date = datetime.strptime(ob_d, "%Y-%m-%d").date()
+                            rt_date = datetime.strptime(rt_d, "%Y-%m-%d").date()
+                            if rt_date <= ob_date:
+                                tg_send("❌ 回程日期必须晚于去程")
+                            else:
+                                db = get_db()
+                                c = db.cursor()
+                                c.execute("UPDATE trips SET outbound_date=%s, return_date=%s WHERE id=%s",
+                                          (ob_d, rt_d, tid))
+                                db.commit()
+                                db.close()
+                                tg_send(f"📅 行程 #{tid} 日期已更新\n去程: {ob_d} → 回程: {rt_d}")
+                        except ValueError:
+                            tg_send("❌ 日期格式错误，请用 YYYY-MM-DD")
+                        except Exception as e:
+                            tg_send(f"❌ {e}")
+                    else:
+                        tg_send("格式: `/trip date 编号 去程 回程`\n例: `/trip date 1 2026-09-18 2026-09-28`")
                 elif text.startswith("/trip time"):
                     parts = text.split()
                     if len(parts) >= 5:
