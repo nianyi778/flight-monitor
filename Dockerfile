@@ -16,6 +16,6 @@ VOLUME ["/app/data"]
 
 ENV PYTHONUNBUFFERED=1
 
-EXPOSE 8080
+EXPOSE 8081
 
 CMD ["python", "main.py"]
