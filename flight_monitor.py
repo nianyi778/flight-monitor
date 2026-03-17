@@ -47,10 +47,10 @@ PUSH_INTERVAL = int(os.getenv("PUSH_INTERVAL", "60"))
 ACK_KEYWORD = "确认收到"
 
 # TiDB 数据库
-DB_HOST = os.getenv("DB_HOST", "gateway01.ap-northeast-1.prod.aws.tidbcloud.com")
+DB_HOST = os.getenv("DB_HOST", "")
 DB_PORT = int(os.getenv("DB_PORT", "4000"))
-DB_USER = os.getenv("DB_USER", "3gWwwioQDxy2qj6.root")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "Er77WVoCjAKNVxQz")
+DB_USER = os.getenv("DB_USER", "")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 DB_NAME = os.getenv("DB_NAME", "test")
 
 # 数据持久化目录（Docker volume 挂载点）
