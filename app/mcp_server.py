@@ -13,7 +13,7 @@ from app.db import get_db, get_active_trips
 
 mcp = FastMCP(
     "Flight Monitor",
-    description=(
+    instructions=(
         "东京⇄上海机票价格自动监控系统。"
         "监控多个行程的机票价格，自动抓取携程和Google Flights数据，"
         "通过GPT-4o视觉分析提取价格，发现低价自动通知。"
