@@ -196,70 +196,120 @@ def _handle_trips():
     tg_send_with_buttons("\n".join(lines), buttons)
 
 
-def _handle_trip_add(text):
-    # /trip add 去程 回程 [预算] [去HH-HH] [回HH-HH]
+def _validate_trip_input(text):
+    """校验行程输入，返回 (parsed_data, error_msg)"""
     parts = text.split()
     if len(parts) < 4:
-        tg_send(
+        return None, (
             "✈️ *添加行程*\n\n"
             "格式: `/trip add 去程 回程 [预算] [去H-H] [回H-H]`\n\n"
             "例:\n"
-            "`/trip add 2026-09-18 2026-09-27 1500 去19-23 回0-6`\n"
-            "`/trip add 2026-09-18 2026-09-27 1500`\n"
-            "`/trip add 2026-12-28 2027-01-05`  (默认¥1500 去19-23 回0-6)"
+            "`/trip add 2026-09-18 2026-09-28 1500 去19-23 回0-6`\n"
+            "`/trip add 2026-09-18 2026-09-28 1500`\n"
+            "`/trip add 2026-12-28 2027-01-05`  (默认¥1500)"
+        )
+
+    errors = []
+    ob_d, rt_d = parts[2], parts[3]
+
+    # 1. 日期格式校验
+    try:
+        ob_date = datetime.strptime(ob_d, "%Y-%m-%d").date()
+    except ValueError:
+        errors.append(f"❌ 去程日期格式错误: `{ob_d}` (应为 YYYY-MM-DD)")
+
+    try:
+        rt_date = datetime.strptime(rt_d, "%Y-%m-%d").date()
+    except ValueError:
+        errors.append(f"❌ 回程日期格式错误: `{rt_d}` (应为 YYYY-MM-DD)")
+
+    if errors:
+        return None, "\n".join(errors)
+
+    # 2. 日期逻辑校验
+    today = now_jst().date()
+    if ob_date <= today:
+        errors.append(f"❌ 去程日期 `{ob_d}` 已过期（今天是 {today}）")
+    if rt_date <= ob_date:
+        errors.append(f"❌ 回程日期 `{rt_d}` 必须晚于去程 `{ob_d}`")
+    if (rt_date - ob_date).days > 30:
+        errors.append(f"⚠️ 行程跨度 {(rt_date - ob_date).days} 天，超过30天，确认日期是否正确？")
+
+    # 3. 解析可选参数
+    bgt = 1500
+    ob_start, ob_end = 19, 23
+    rt_start, rt_end = 0, 6
+
+    for p in parts[4:]:
+        if p.startswith("去"):
+            try:
+                s, e = [int(x) for x in p.replace("去", "").split("-")]
+                if not (0 <= s <= 23 and 0 <= e <= 23):
+                    errors.append(f"❌ 去程时间 `{p}` 超出范围 (0-23)")
+                elif s > e:
+                    errors.append(f"❌ 去程时间 `{p}` 起始应小于结束")
+                else:
+                    ob_start, ob_end = s, e
+            except:
+                errors.append(f"❌ 去程时间格式错误: `{p}` (应为 去H-H)")
+        elif p.startswith("回"):
+            try:
+                s, e = [int(x) for x in p.replace("回", "").split("-")]
+                if not (0 <= s <= 23 and 0 <= e <= 23):
+                    errors.append(f"❌ 回程时间 `{p}` 超出范围 (0-23)")
+                else:
+                    rt_start, rt_end = s, e
+            except:
+                errors.append(f"❌ 回程时间格式错误: `{p}` (应为 回H-H)")
+        elif p.isdigit():
+            bgt = int(p)
+            if bgt < 100 or bgt > 50000:
+                errors.append(f"❌ 预算 ¥{bgt} 不合理 (范围 100-50000)")
+        else:
+            errors.append(f"❌ 无法识别参数: `{p}`")
+
+    if errors:
+        return None, "\n".join(errors)
+
+    return {
+        "ob_d": ob_d, "rt_d": rt_d, "budget": bgt,
+        "ob_start": ob_start, "ob_end": ob_end,
+        "rt_start": rt_start, "rt_end": rt_end,
+    }, None
+
+
+def _handle_trip_add(text):
+    """校验 → 预览确认 → 等用户点按钮才写入数据库"""
+    data, error = _validate_trip_input(text)
+    if error:
+        tg_send_with_buttons(
+            f"{error}\n\n💡 正确格式:\n`/trip add 2026-09-18 2026-09-28 1500 去19-23 回0-6`",
+            [[{"text": "📖 查看帮助", "callback_data": "trip_add_guide"}]]
         )
         return
 
-    try:
-        ob_d, rt_d = parts[2], parts[3]
-        datetime.strptime(ob_d, "%Y-%m-%d")
-        datetime.strptime(rt_d, "%Y-%m-%d")
+    # 生成预览卡片，不写入数据库
+    countdown = _days_until(data["ob_d"])
+    days = (datetime.strptime(data["rt_d"], "%Y-%m-%d").date() -
+            datetime.strptime(data["ob_d"], "%Y-%m-%d").date()).days
 
-        # 解析可选参数（预算、时间窗口，顺序灵活）
-        bgt = 1500
-        ob_start, ob_end = 19, 23
-        rt_start, rt_end = 0, 6
+    # 把校验通过的数据编码到 callback_data 里
+    cb_data = (f"trip_confirm_{data['ob_d']}_{data['rt_d']}_{data['budget']}_"
+               f"{data['ob_start']}-{data['ob_end']}_{data['rt_start']}-{data['rt_end']}")
 
-        for p in parts[4:]:
-            if p.startswith("去"):
-                s, e = [int(x) for x in p.replace("去", "").split("-")]
-                ob_start, ob_end = s, e
-            elif p.startswith("回"):
-                s, e = [int(x) for x in p.replace("回", "").split("-")]
-                rt_start, rt_end = s, e
-            elif p.isdigit():
-                bgt = int(p)
-
-        db = get_db()
-        c = db.cursor()
-        c.execute(
-            "INSERT INTO trips (outbound_date, return_date, budget, "
-            "outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-            (ob_d, rt_d, bgt, ob_start, ob_end, rt_start, rt_end)
-        )
-        db.commit()
-        new_id = c.lastrowid
-        db.close()
-
-        countdown = _days_until(ob_d)
-        tg_send_with_buttons(
-            f"✅ *行程已添加!*\n\n"
-            f"🆔 #{new_id}  {countdown}\n"
-            f"📅 {ob_d} → {rt_d}\n"
-            f"💰 ¥{bgt:,}(CNY)\n"
-            f"🛫 去程出发: {ob_start}:00-{ob_end}:00\n"
-            f"🛬 回程到达: {rt_start}:00-{rt_end}:00",
-            [
-                [{"text": "⏰ 调整时间", "callback_data": f"trip_time_guide_{new_id}"},
-                 {"text": "💰 调整预算", "callback_data": f"trip_budget_guide_{new_id}"}],
-                [{"text": "🔍 立即查价", "callback_data": "do_check"}],
-            ]
-        )
-    except ValueError:
-        tg_send("❌ 格式错误\n日期: YYYY-MM-DD  预算: 数字  时间: 去H-H 回H-H")
-    except Exception as e:
-        tg_send(f"❌ 添加失败: {e}")
+    tg_send_with_buttons(
+        f"✈️ *请确认行程信息*\n\n"
+        f"📅 去程: {data['ob_d']}  ({countdown})\n"
+        f"📅 回程: {data['rt_d']}  (共{days}天)\n"
+        f"💰 预算: ¥{data['budget']:,}(CNY)\n"
+        f"🛫 去程出发: {data['ob_start']}:00-{data['ob_end']}:00\n"
+        f"🛬 回程到达: {data['rt_start']}:00-{data['rt_end']}:00\n\n"
+        f"信息正确吗？",
+        [
+            [{"text": "✅ 确认添加", "callback_data": cb_data},
+             {"text": "❌ 取消", "callback_data": "cancel_add"}],
+        ]
+    )
 
 
 def _handle_status():
@@ -357,9 +407,49 @@ def _handle_callback(callback_id, data, message_id):
         tg_send(
             "✈️ *添加行程*\n\n"
             "请输入（复制修改日期即可）：\n\n"
-            "`/trip add 2026-09-18 2026-09-27 1500`\n\n"
-            "格式: 去程日期 回程日期 预算(CNY)"
+            "`/trip add 2026-09-18 2026-09-28 1500 去19-23 回0-6`\n\n"
+            "格式: 去程 回程 [预算] [去H-H] [回H-H]\n"
+            "预算默认¥1500，时间默认去19-23 回0-6"
         )
+
+    elif data == "cancel_add":
+        tg_answer_callback(callback_id, "已取消")
+        tg_edit_message(message_id, "❌ 已取消添加")
+
+    elif data.startswith("trip_confirm_"):
+        # trip_confirm_2026-09-18_2026-09-28_1500_19-23_0-6
+        try:
+            _, _, ob_d, rt_d, bgt_str, ob_time, rt_time = data.split("_", 6)
+            bgt = int(bgt_str)
+            ob_s, ob_e = [int(x) for x in ob_time.split("-")]
+            rt_s, rt_e = [int(x) for x in rt_time.split("-")]
+
+            db = get_db()
+            c = db.cursor()
+            c.execute(
+                "INSERT INTO trips (outbound_date, return_date, budget, "
+                "outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (ob_d, rt_d, bgt, ob_s, ob_e, rt_s, rt_e)
+            )
+            db.commit()
+            new_id = c.lastrowid
+            db.close()
+
+            tg_answer_callback(callback_id, f"✅ 行程#{new_id}已添加")
+            countdown = _days_until(ob_d)
+            tg_edit_message(message_id,
+                f"✅ *行程#{new_id} 已添加!*\n\n"
+                f"📅 {ob_d} → {rt_d}  ({countdown})\n"
+                f"💰 ¥{bgt:,}(CNY)\n"
+                f"🛫 {ob_s}:00-{ob_e}:00  🛬 {rt_s}:00-{rt_e}:00\n\n"
+                f"系统将在下次巡查时开始监控此行程",
+                [[{"text": "🔍 立即查价", "callback_data": "do_check"},
+                  {"text": "✈️ 查看行程", "callback_data": "show_trips"}]]
+            )
+        except Exception as e:
+            tg_answer_callback(callback_id, f"添加失败")
+            tg_send(f"❌ 添加失败: {e}")
 
     elif data.startswith("trip_pause_"):
         tid = int(data.split("_")[-1])
