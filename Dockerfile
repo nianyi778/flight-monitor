@@ -8,11 +8,12 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && apt-get install -y --no-install-recommends fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
-COPY flight_monitor.py .
+COPY main.py .
+COPY app/ app/
 
 # 持久化目录
 VOLUME ["/app/data"]
 
 ENV PYTHONUNBUFFERED=1
 
-CMD ["python", "flight_monitor.py"]
+CMD ["python", "main.py"]
