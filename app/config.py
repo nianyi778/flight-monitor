@@ -26,22 +26,16 @@ LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID", "")
 
-CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "3600"))
-PUSH_INTERVAL = int(os.getenv("PUSH_INTERVAL", "60"))
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL") or "3600")
+PUSH_INTERVAL = int(os.getenv("PUSH_INTERVAL") or "60")
 ACK_KEYWORD = "确认收到"
-
-# 航班参数（旧版单行程配置，用于日志/状态显示）
-OUTBOUND_DATE = os.getenv("OUTBOUND_DATE", "")
-RETURN_DATE = os.getenv("RETURN_DATE", "")
-BUDGET_TOTAL = int(os.getenv("BUDGET_TOTAL", "1500"))
-OUTBOUND_DEPART_AFTER = int(os.getenv("OUTBOUND_DEPART_AFTER", "19"))
 
 # TiDB 数据库
 DB_HOST = os.getenv("DB_HOST", "")
-DB_PORT = int(os.getenv("DB_PORT", "4000"))
+DB_PORT = int(os.getenv("DB_PORT") or "4000")
 DB_USER = os.getenv("DB_USER", "")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
-DB_NAME = os.getenv("DB_NAME", "test")
+DB_NAME = os.getenv("DB_NAME") or "test"
 
 # 数据持久化目录（Docker volume 挂载点）
 DATA_DIR = Path("/app/data")

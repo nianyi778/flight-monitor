@@ -8,7 +8,6 @@ import signal
 
 from app.config import (
     LLM_API_KEY, TG_BOT_TOKEN, CHECK_INTERVAL, PUSH_INTERVAL,
-    OUTBOUND_DATE, RETURN_DATE, BUDGET_TOTAL, OUTBOUND_DEPART_AFTER,
     DATA_DIR, now_jst, log, load_state, save_state,
 )
 from app.db import (
@@ -153,12 +152,11 @@ async def main():
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
+    trips = get_active_trips()
     log.info("=" * 55)
     log.info("✈️ 机票价格监控系统启动 (Docker)")
-    log.info(f"   去程: {OUTBOUND_DATE} 东京→上海 ({OUTBOUND_DEPART_AFTER}:00后)")
-    log.info(f"   回程: {RETURN_DATE} 上海→东京 (红眼)")
-    log.info(f"   预算: ¥{BUDGET_TOTAL} 往返")
-    log.info(f"   检查间隔: {CHECK_INTERVAL}s")
+    log.info(f"   监控行程: {len(trips)} 个")
+    log.info(f"   检查间隔: ~{CHECK_INTERVAL}s (随机抖动)")
     log.info(f"   TG通知: {'已配置' if TG_BOT_TOKEN else '⚠️ 未配置'}")
     log.info("=" * 55)
 

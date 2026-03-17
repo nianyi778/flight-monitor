@@ -7,7 +7,7 @@ import asyncio
 import requests
 
 from app.config import (
-    TG_BOT_TOKEN, TG_CHAT_ID, ACK_KEYWORD, BUDGET_TOTAL, CHECK_INTERVAL,
+    TG_BOT_TOKEN, TG_CHAT_ID, ACK_KEYWORD, CHECK_INTERVAL,
     log, load_state, save_state,
 )
 from app.db import get_db, get_active_trips
@@ -75,13 +75,13 @@ async def tg_command_listener():
                     uptime_checks = s.get("check_count", 0)
                     best = s.get("best_price", "?")
                     boot = s.get("boot_count", 0)
+                    trips = get_active_trips()
                     tg_send(
                         f"📊 *系统状态*\n\n"
                         f"启动次数: {boot}\n"
                         f"已巡查: {uptime_checks} 次\n"
-                        f"历史最低: ¥{best}\n"
-                        f"预算: ¥{BUDGET_TOTAL}\n"
-                        f"检查间隔: {CHECK_INTERVAL//60} 分钟"
+                        f"监控行程: {len(trips)} 个\n"
+                        f"检查间隔: ~{CHECK_INTERVAL//60} 分钟"
                     )
 
                 elif text == "/history":
