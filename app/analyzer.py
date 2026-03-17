@@ -137,6 +137,7 @@ def analyze_all_screenshots(screenshots):
         analysis = analyze_screenshot(ss)
         analysis["source"] = ss["name"]
         analysis["url"] = ss["url"]
+        analysis["flight_date"] = ss.get("flight_date", "")
 
         if ss["direction"] == "outbound":
             results["outbound"].append(analysis)

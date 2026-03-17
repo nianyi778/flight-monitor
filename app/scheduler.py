@@ -136,8 +136,10 @@ async def run_check(force=False):
             best_ob = combos[0]["outbound"] if combos else {}
             best_rt = combos[0]["return"] if combos else {}
 
-            ob_info = f"{best_ob.get('airline', '?')} {best_ob.get('departure_time', '')}→{best_ob.get('arrival_time', '')} {_brief_price(best_ob)} ({best_ob.get('_source', '')})" if best_ob else "无数据"
-            rt_info = f"{best_rt.get('airline', '?')} {best_rt.get('departure_time', '')}→{best_rt.get('arrival_time', '')} {_brief_price(best_rt)} ({best_rt.get('_source', '')})" if best_rt else "无数据"
+            ob_date_tag = f" [{best_ob.get('_flight_date', '')}]" if best_ob.get('_flight_date') and best_ob.get('_flight_date') != trip['outbound_date'] else ""
+            rt_date_tag = f" [{best_rt.get('_flight_date', '')}]" if best_rt.get('_flight_date') and best_rt.get('_flight_date') != trip['return_date'] else ""
+            ob_info = f"{best_ob.get('airline', '?')} {best_ob.get('departure_time', '')}→{best_ob.get('arrival_time', '')} {_brief_price(best_ob)} ({best_ob.get('_source', '')}){ob_date_tag}" if best_ob else "无数据"
+            rt_info = f"{best_rt.get('airline', '?')} {best_rt.get('departure_time', '')}→{best_rt.get('arrival_time', '')} {_brief_price(best_rt)} ({best_rt.get('_source', '')}){rt_date_tag}" if best_rt else "无数据"
 
             brief_lines.append(
                 f"✈️ *#{trip['id']}* {trip['outbound_date']}→{trip['return_date']} (预算¥{budget})\n"

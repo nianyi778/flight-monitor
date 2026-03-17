@@ -595,14 +595,16 @@ def _handle_callback(callback_id, data, message_id):
         try:
             db = get_db()
             c = db.cursor()
-            c.execute("SELECT outbound_date, return_date, budget, outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end FROM trips WHERE id=%s", (tid,))
+            c.execute("SELECT outbound_date, return_date, budget, outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end, outbound_flex, return_flex FROM trips WHERE id=%s", (tid,))
             r = c.fetchone()
             db.close()
             if r:
+                ob_flex = r[7] or 0
+                rt_flex = r[8] if r[8] is not None else 1
                 tg_send_with_buttons(
                     f"✏️ *编辑行程 #{tid}*\n\n"
-                    f"📅 去程: `{r[0]}`\n"
-                    f"📅 回程: `{r[1]}`\n"
+                    f"📅 去程: `{r[0]}` (弹性±{ob_flex}天)\n"
+                    f"📅 回程: `{r[1]}` (弹性±{rt_flex}天)\n"
                     f"💰 预算: `¥{r[2]:,}`\n"
                     f"🛫 去程出发: `{r[3]}-{r[4]}点`\n"
                     f"🛬 回程到达: `{r[5]}-{r[6]}点`\n\n"
@@ -611,7 +613,8 @@ def _handle_callback(callback_id, data, message_id):
                         [{"text": "📅 改日期", "callback_data": f"trip_date_guide_{tid}"},
                          {"text": "💰 改预算", "callback_data": f"trip_budget_guide_{tid}"}],
                         [{"text": "⏰ 改时间窗口", "callback_data": f"trip_time_guide_{tid}"},
-                         {"text": "↩️ 返回", "callback_data": "show_trips"}],
+                         {"text": "📆 改弹性天数", "callback_data": f"trip_flex_guide_{tid}"}],
+                        [{"text": "↩️ 返回", "callback_data": "show_trips"}],
                     ]
                 )
             else:
@@ -632,6 +635,18 @@ def _handle_callback(callback_id, data, message_id):
         tid = data.split("_")[-1]
         tg_answer_callback(callback_id)
         tg_send(f"💰 修改预算，请输入：\n\n`/trip budget {tid} 新金额`\n\n例: `/trip budget {tid} 2000`")
+
+    elif data.startswith("trip_flex_guide_"):
+        tid = data.split("_")[-1]
+        tg_answer_callback(callback_id)
+        tg_send(
+            f"📆 修改弹性天数，请输入：\n\n"
+            f"`/trip flex {tid} 去N 回N`\n\n"
+            f"例: `/trip flex {tid} 去0 回1`\n"
+            f"含义: 去程不弹性，回程向前搜1天\n\n"
+            f"回1 = 回程日期前1天也会搜索\n"
+            f"如 回程9/28 + 回1 → 搜9/27和9/28"
+        )
 
     elif data.startswith("trip_time_guide_"):
         tid = data.split("_")[-1]
@@ -795,6 +810,29 @@ async def tg_command_listener():
                             tg_send(f"❌ {e}")
                     else:
                         tg_send("格式: `/trip date 编号 去程 回程`\n例: `/trip date 1 2026-09-18 2026-09-28`")
+                elif text.startswith("/trip flex"):
+                    parts = text.split()
+                    if len(parts) >= 5:
+                        try:
+                            tid = int(parts[2])
+                            ob_flex = int(parts[3].replace("去", ""))
+                            rt_flex = int(parts[4].replace("回", ""))
+                            if ob_flex < 0 or rt_flex < 0 or ob_flex > 7 or rt_flex > 7:
+                                tg_send("❌ 弹性天数范围 0-7")
+                            else:
+                                db = get_db()
+                                c = db.cursor()
+                                c.execute("UPDATE trips SET outbound_flex=%s, return_flex=%s WHERE id=%s",
+                                          (ob_flex, rt_flex, tid))
+                                db.commit()
+                                db.close()
+                                tg_send(f"📆 行程 #{tid} 弹性已更新\n去程±{ob_flex}天 回程±{rt_flex}天")
+                        except ValueError:
+                            tg_send("❌ 格式: `/trip flex 编号 去N 回N`")
+                        except Exception as e:
+                            tg_send(f"❌ {e}")
+                    else:
+                        tg_send("格式: `/trip flex 编号 去N 回N`\n例: `/trip flex 1 去0 回1`")
                 elif text.startswith("/trip time"):
                     parts = text.split()
                     if len(parts) >= 5:
