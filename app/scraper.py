@@ -6,7 +6,7 @@ import asyncio
 import random
 
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
+from playwright_stealth import Stealth
 
 from app.config import SCREENSHOT_DIR, BROWSER_PROFILE, PROXY_URL, now_jst, log
 from app.matcher import get_search_urls
@@ -102,6 +102,13 @@ async def capture_screenshots(trip):
 
             context = await p.chromium.launch_persistent_context(**launch_opts)
 
+            # 对整个 context 注入 stealth（所有新页面自动生效）
+            stealth = Stealth(
+                navigator_languages_override=("ja", "ja-JP"),
+                navigator_platform_override="Win32",
+            )
+            await stealth.apply_stealth_async(context)
+
             for idx, search in enumerate(search_urls):
                 if shutdown_event.is_set():
                     break
@@ -117,9 +124,6 @@ async def capture_screenshots(trip):
                     await asyncio.sleep(delay)
 
                 page = await context.new_page()
-
-                # 对每个新页面注入 stealth
-                await stealth_async(page)
 
                 ss_name = f"{timestamp}_{search['name']}_{search['direction']}.png"
                 ss_path = SCREENSHOT_DIR / ss_name
