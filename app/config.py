@@ -25,6 +25,11 @@ LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
 
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID", "")
+# 允许响应的 chat ID 列表（私聊 + 群聊）
+TG_ALLOWED_CHATS = set(filter(None, [
+    TG_CHAT_ID,
+    *os.getenv("TG_GROUP_IDS", "").split(","),
+]))
 
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL") or "3600")
 PUSH_INTERVAL = int(os.getenv("PUSH_INTERVAL") or "60")

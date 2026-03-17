@@ -10,7 +10,7 @@ from datetime import datetime
 import requests
 
 from app.config import (
-    TG_BOT_TOKEN, TG_CHAT_ID, ACK_KEYWORD, CHECK_INTERVAL,
+    TG_BOT_TOKEN, TG_CHAT_ID, TG_ALLOWED_CHATS, ACK_KEYWORD, CHECK_INTERVAL,
     now_jst, log, load_state, save_state,
 )
 from app.db import get_db, get_active_trips
@@ -694,7 +694,7 @@ async def tg_command_listener():
                     cb_data = callback.get("data", "")
                     cb_msg_id = callback.get("message", {}).get("message_id")
                     chat_id = str(callback.get("message", {}).get("chat", {}).get("id", ""))
-                    if chat_id == str(TG_CHAT_ID):
+                    if chat_id in TG_ALLOWED_CHATS:
                         _handle_callback(cb_id, cb_data, cb_msg_id)
                     continue
 
@@ -703,7 +703,7 @@ async def tg_command_listener():
                 text = msg.get("text", "").strip()
                 chat_id = str(msg.get("chat", {}).get("id", ""))
 
-                if chat_id != str(TG_CHAT_ID):
+                if chat_id not in TG_ALLOWED_CHATS:
                     continue
 
                 if text == "/check":
