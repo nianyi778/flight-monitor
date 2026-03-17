@@ -78,6 +78,7 @@ def setup_tg_commands():
             {"command": "trips", "description": "✈️ 行程管理"},
             {"command": "status", "description": "📊 系统状态"},
             {"command": "history", "description": "📈 价格趋势"},
+            {"command": "health", "description": "🩺 健康检查"},
             {"command": "help", "description": "💡 使用帮助"},
         ])
         log.info("TG 菜单命令已注册")
@@ -314,9 +315,61 @@ def _handle_trip_add(text):
     )
 
 
+def _health_check():
+    """健康检查：LLM / 数据库 / 代理 / TG"""
+    from app.config import LLM_BASE_URL, LLM_API_KEY, LLM_MODEL, PROXY_URL
+    import requests as req
+
+    checks = {}
+
+    # 1. LLM
+    try:
+        r = req.post(f"{LLM_BASE_URL}/chat/completions",
+            headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"},
+            json={"model": LLM_MODEL, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 5},
+            timeout=10)
+        checks["llm"] = "✅" if r.ok else f"❌ {r.status_code}"
+    except Exception as e:
+        checks["llm"] = f"❌ {e}"
+
+    # 2. 数据库
+    try:
+        db = get_db()
+        c = db.cursor()
+        c.execute("SELECT 1")
+        db.close()
+        checks["db"] = "✅"
+    except Exception as e:
+        checks["db"] = f"❌ {e}"
+
+    # 3. 代理
+    if PROXY_URL:
+        try:
+            r = req.get("https://httpbin.org/ip",
+                proxies={"https": PROXY_URL, "http": PROXY_URL}, timeout=10)
+            ip = r.json().get("origin", "?")
+            checks["proxy"] = f"✅ {ip}"
+        except Exception as e:
+            checks["proxy"] = f"❌ {e}"
+    else:
+        checks["proxy"] = "⚠️ 未配置"
+
+    # 4. TG Bot
+    try:
+        r = req.get(f"https://api.telegram.org/bot{TG_BOT_TOKEN}/getMe", timeout=5)
+        checks["tg"] = "✅" if r.ok else f"❌ {r.status_code}"
+    except Exception as e:
+        checks["tg"] = f"❌ {e}"
+
+    return checks
+
+
 def _handle_status():
+    from app.config import LLM_BASE_URL, LLM_MODEL, PROXY_URL
+
     s = load_state()
     trips = get_active_trips()
+
     lines = [
         "📊 *系统状态*\n",
         f"🔄 启动次数: {s.get('boot_count', 0)}",
@@ -324,10 +377,26 @@ def _handle_status():
         f"✈️ 监控行程: {len(trips)} 个",
         f"⏰ 间隔: ~{CHECK_INTERVAL // 60} 分钟",
         f"🕐 {now_jst().strftime('%Y-%m-%d %H:%M')} JST",
+        "",
+        "━━━ 配置 ━━━",
+        f"🤖 模型: `{LLM_MODEL}`",
+        f"🔗 API: `{LLM_BASE_URL.split('//')[1][:30]}`",
+        f"🏠 代理: `{PROXY_URL or '未配置'}`",
     ]
+
+    # 行程摘要
+    if trips:
+        lines.append("")
+        lines.append("━━━ 行程 ━━━")
+        for t in trips:
+            best = t.get("best_price")
+            best_str = f"¥{best:,}" if best else "暂无"
+            lines.append(f"#{t['id']} {t['outbound_date']}→{t['return_date']} 预算¥{t['budget']:,} 最低{best_str}")
+
     tg_send_with_buttons("\n".join(lines), [
-        [{"text": "🔍 立即查价", "callback_data": "do_check"},
-         {"text": "✈️ 行程管理", "callback_data": "show_trips"}],
+        [{"text": "🩺 健康检查", "callback_data": "health_check"},
+         {"text": "🔍 立即查价", "callback_data": "do_check"}],
+        [{"text": "✈️ 行程管理", "callback_data": "show_trips"}],
     ])
 
 
@@ -402,6 +471,19 @@ def _handle_callback(callback_id, data, message_id):
     elif data == "show_status":
         tg_answer_callback(callback_id)
         _handle_status()
+
+    elif data == "health_check":
+        tg_answer_callback(callback_id, "🩺 检查中...")
+        checks = _health_check()
+        lines = ["🩺 *健康检查*\n"]
+        lines.append(f"🤖 LLM: {checks['llm']}")
+        lines.append(f"💾 数据库: {checks['db']}")
+        lines.append(f"🏠 代理: {checks['proxy']}")
+        lines.append(f"📱 TG Bot: {checks['tg']}")
+
+        all_ok = all("✅" in str(v) for v in checks.values())
+        lines.append(f"\n{'✅ 全部正常' if all_ok else '⚠️ 部分异常，请检查'}")
+        tg_send("\n".join(lines))
 
     elif data == "show_history":
         tg_answer_callback(callback_id)
@@ -575,6 +657,16 @@ async def tg_command_listener():
                         force_check_event.set()
                 elif text == "/status":
                     _handle_status()
+                elif text == "/health":
+                    checks = _health_check()
+                    lines = ["🩺 *健康检查*\n"]
+                    lines.append(f"🤖 LLM: {checks['llm']}")
+                    lines.append(f"💾 数据库: {checks['db']}")
+                    lines.append(f"🏠 代理: {checks['proxy']}")
+                    lines.append(f"📱 TG Bot: {checks['tg']}")
+                    all_ok = all("✅" in str(v) for v in checks.values())
+                    lines.append(f"\n{'✅ 全部正常' if all_ok else '⚠️ 部分异常'}")
+                    tg_send("\n".join(lines))
                 elif text == "/history":
                     _handle_history()
                 elif text in ("/trips", "/trip list", "/trip", "/budget", "/start"):
