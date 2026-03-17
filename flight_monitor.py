@@ -19,8 +19,14 @@ import signal
 import sqlite3
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
+
+# 东京时间 UTC+9
+JST = timezone(timedelta(hours=9))
+
+def now_jst():
+    return datetime.now(JST)
 
 import requests
 from playwright.async_api import async_playwright
@@ -237,7 +243,7 @@ async def capture_screenshots(trip):
     """用 Playwright + 持久化指纹抓取所有平台截图"""
     SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
     BROWSER_PROFILE.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    timestamp = now_jst().strftime("%Y%m%d_%H%M")
 
     screenshots = []
 
@@ -433,7 +439,7 @@ def analyze_screenshot(screenshot_info):
 
 def analyze_all_screenshots(screenshots):
     """分析所有截图"""
-    results = {"outbound": [], "return": [], "timestamp": datetime.now().isoformat()}
+    results = {"outbound": [], "return": [], "timestamp": now_jst().isoformat()}
 
     for ss in screenshots:
         log.info(f"🤖 分析: {ss['name']} {ss['label']}")
@@ -755,7 +761,7 @@ async def tg_command_listener():
 
 
 def format_alert_message(combos, results, trip=None):
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    ts = now_jst().strftime("%Y-%m-%d %H:%M")
     ob_date = trip["outbound_date"] if trip else "?"
     rt_date = trip["return_date"] if trip else "?"
     budget = trip["budget"] if trip else 1500
@@ -841,7 +847,7 @@ def get_db():
 
 def save_to_db(results, combos, trip):
     """将所有航班数据和巡查汇总写入 TiDB"""
-    now = datetime.now()
+    now = now_jst()
     trip_id = trip["id"]
 
     try:
@@ -927,8 +933,26 @@ async def push_until_ack(msg):
             break
 
 
-async def run_check():
+def already_checked_this_hour():
+    """检查本小时是否已有查询记录"""
+    try:
+        db = get_db()
+        cur = db.cursor()
+        hour_start = now_jst().replace(minute=0, second=0, microsecond=0)
+        cur.execute("SELECT COUNT(*) FROM check_summary WHERE check_time >= %s", (hour_start,))
+        count = cur.fetchone()[0]
+        db.close()
+        return count > 0
+    except:
+        return False
+
+
+async def run_check(force=False):
     """执行一次完整的价格检查（遍历所有 active 行程）"""
+    if not force and already_checked_this_hour():
+        log.info("⏭ 本小时已检查过，跳过（重启不重复查询）")
+        return
+
     trips = get_active_trips()
     if not trips:
         log.warning("没有 active 行程，跳过检查")
@@ -939,7 +963,7 @@ async def run_check():
     state["check_count"] = check_count
     save_state(state)
 
-    brief_lines = [f"🕐 *{datetime.now().strftime('%H:%M')} 巡查报告* (第{check_count}次)\n"]
+    brief_lines = [f"🕐 *{now_jst().strftime('%H:%M')} 巡查报告* (第{check_count}次)\n"]
 
     for trip in trips:
         log.info("=" * 50)
@@ -988,10 +1012,29 @@ async def run_check():
 
             diff = f"¥{best_total - budget}" if best_total else "?"
             new_best = min(best_total or 99999, prev_best or 99999)
+
+            # 提取去程/回程最优航班详情
+            best_ob = combos[0]["outbound"] if combos else {}
+            best_rt = combos[0]["return"] if combos else {}
+
+            def _brief_price(f):
+                oc = f.get("original_currency", "CNY")
+                op = f.get("original_price")
+                cny = f.get("price_cny", "?")
+                flag = "🇨🇳" if oc == "CNY" else "🇯🇵"
+                if oc == "JPY" and op:
+                    return f"¥{cny}({flag}{op:,}円)"
+                return f"¥{cny}({flag}CNY)"
+
+            ob_info = f"{best_ob.get('airline', '?')} {best_ob.get('departure_time', '')}→{best_ob.get('arrival_time', '')} {_brief_price(best_ob)} ({best_ob.get('_source', '')})" if best_ob else "无数据"
+            rt_info = f"{best_rt.get('airline', '?')} {best_rt.get('departure_time', '')}→{best_rt.get('arrival_time', '')} {_brief_price(best_rt)} ({best_rt.get('_source', '')})" if best_rt else "无数据"
+
             brief_lines.append(
-                f"✈️ *#{trip['id']}* {trip['outbound_date']}→{trip['return_date']}\n"
-                f"  最低往返: ¥{best_total or '?'}{trend} | 差预算: {diff}\n"
-                f"  历史最低: ¥{new_best if new_best < 99999 else '?'}"
+                f"✈️ *#{trip['id']}* {trip['outbound_date']}→{trip['return_date']} (预算¥{budget})\n"
+                f"  最低往返: ¥{best_total or '?'}(CNY){trend} | 差预算: {diff}\n"
+                f"  去程: {ob_info}\n"
+                f"  回程: {rt_info}\n"
+                f"  历史最低: ¥{new_best if new_best < 99999 else '?'}(CNY)"
             )
 
     # 发送汇总简报（没有触发好价推送时）
@@ -1057,13 +1100,15 @@ async def main():
     tg_listener_task = asyncio.create_task(tg_command_listener())
 
     # 主循环
+    is_force = False
     while not shutdown_event.is_set():
         try:
-            await run_check()
+            await run_check(force=is_force)
         except Exception as e:
             log.error(f"检查异常: {e}", exc_info=True)
             tg_send(f"⚠️ 机票监控异常: {e}")
 
+        is_force = False
         # 等待下一次检查（可被 shutdown 或 /check 命令中断）
         # 随机间隔：CHECK_INTERVAL ± 30%，防止被目标站点识别为定时爬虫
         jitter = random.uniform(0.7, 1.3)
@@ -1078,6 +1123,7 @@ async def main():
         )
         if force_check_event.is_set():
             log.info("📢 收到 /check 命令，立即执行检查")
+            is_force = True
 
     tg_listener_task.cancel()
     log.info("🛑 监控系统已停止")
