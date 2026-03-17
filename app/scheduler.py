@@ -198,13 +198,13 @@ async def main():
         f"/trip del 编号 - 删除行程"
     )
 
+    # 启动 TG 命令监听（后台，必须在 push_until_ack 之前）
+    tg_listener_task = asyncio.create_task(tg_command_listener())
+
     # 首次检查是否有未确认的通知（重启后继续推送）
     if state.get("pending_ack") and state.get("last_alert_msg"):
         log.info("发现未确认的通知，继续推送...")
         await push_until_ack(state["last_alert_msg"])
-
-    # 启动 TG 命令监听（后台）
-    tg_listener_task = asyncio.create_task(tg_command_listener())
 
     # 主循环
     is_force = False
