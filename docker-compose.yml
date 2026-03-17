@@ -1,0 +1,15 @@
+services:
+  flight-monitor:
+    image: ghcr.io/${GITHUB_OWNER:-your-username}/flight-monitor:latest
+    container_name: flight-monitor
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - flight-data:/app/data
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+volumes:
+  flight-data:
