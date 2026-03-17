@@ -58,6 +58,8 @@ async def push_until_ack(msg):
 
 async def run_check(force=False):
     """执行一次完整的价格检查（遍历所有 active 行程）"""
+    import app.bot as bot_module
+
     if not force and already_checked_this_hour():
         log.info("⏭ 本小时已检查过，跳过（重启不重复查询）")
         return
@@ -66,6 +68,8 @@ async def run_check(force=False):
     if not trips:
         log.warning("没有 active 行程，跳过检查")
         return
+
+    bot_module.checking_in_progress = True
 
     state = load_state()
     check_count = state.get("check_count", 0) + 1
@@ -141,6 +145,8 @@ async def run_check(force=False):
     state = load_state()
     if not state.get("pending_ack") and len(brief_lines) > 1:
         tg_send("\n\n".join(brief_lines))
+
+    bot_module.checking_in_progress = False
 
 
 async def main():

@@ -19,6 +19,8 @@ from app.notifier import tg_send
 
 # 用于 /check 命令触发立即检查
 force_check_event = asyncio.Event()
+# 标记是否正在查价中
+checking_in_progress = False
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -386,9 +388,12 @@ def _handle_callback(callback_id, data, message_id):
     """处理 Inline Keyboard 按钮回调"""
 
     if data == "do_check":
-        tg_answer_callback(callback_id, "🔍 开始查价...")
-        tg_send("🔍 收到！正在立即查价...")
-        force_check_event.set()
+        if checking_in_progress:
+            tg_answer_callback(callback_id, "⏳ 正在查价中，请稍候...")
+        else:
+            tg_answer_callback(callback_id, "🔍 开始查价...")
+            tg_send("🔍 收到！正在立即查价...")
+            force_check_event.set()
 
     elif data == "show_trips":
         tg_answer_callback(callback_id)
@@ -563,8 +568,11 @@ async def tg_command_listener():
                     continue
 
                 if text == "/check":
-                    tg_send("🔍 收到！正在立即查价...")
-                    force_check_event.set()
+                    if checking_in_progress:
+                        tg_send("⏳ 正在查价中，请稍候...")
+                    else:
+                        tg_send("🔍 收到！正在立即查价...")
+                        force_check_event.set()
                 elif text == "/status":
                     _handle_status()
                 elif text == "/history":
