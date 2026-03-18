@@ -16,17 +16,26 @@ def tg_send(text, parse_mode="Markdown"):
         log.info(f"[TG预览]\n{text}")
         return False
 
-    try:
-        resp = requests.post(
+    def _post(pm):
+        payload = {
+            "chat_id": TG_CHAT_ID,
+            "text": text,
+            "disable_web_page_preview": True,
+        }
+        if pm:
+            payload["parse_mode"] = pm
+        return requests.post(
             f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage",
-            json={
-                "chat_id": TG_CHAT_ID,
-                "text": text,
-                "parse_mode": parse_mode,
-                "disable_web_page_preview": True,
-            },
+            json=payload,
             timeout=10,
         )
+
+    try:
+        resp = _post(parse_mode)
+        if resp.status_code == 400 and parse_mode:
+            # Markdown 解析失败（通常是 URL 含特殊字符），降级为纯文本重试
+            log.warning("TG Markdown 解析失败，降级纯文本重试")
+            resp = _post(None)
         resp.raise_for_status()
         log.info("TG 通知已发送")
         return True

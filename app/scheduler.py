@@ -53,7 +53,7 @@ async def push_until_ack(msg):
 
         push_count += 1
         log.info(f"📢 第 {push_count} 次推送...")
-        tg_send(f"📢 *第{push_count}次提醒*\n\n{msg}")
+        tg_send(f"📢 第{push_count}次提醒\n\n{msg}")
 
         if push_count >= 60:
             log.warning("达到推送上限，停止")
