@@ -51,7 +51,13 @@ async def _simulate_human(page):
 
 
 async def capture_screenshots(trip):
-    """用 Playwright + stealth 插件抓取所有平台截图"""
+    """抓取单个行程的截图（兼容旧接口）"""
+    search_urls = get_search_urls(trip)
+    return await capture_screenshots_batch(search_urls)
+
+
+async def capture_screenshots_batch(search_urls):
+    """批量抓取一组搜索URL的截图（去重后的统一入口）"""
     from app.scheduler import shutdown_event
 
     SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -59,13 +65,12 @@ async def capture_screenshots(trip):
     timestamp = now_jst().strftime("%Y%m%d_%H%M")
 
     screenshots = []
-    search_urls = get_search_urls(trip)
 
-    # 每次巡查随机跳过 1-2 个数据源（降低全扫描的指纹特征）
-    if len(search_urls) > 4 and random.random() > 0.3:
-        skip_count = random.randint(1, 2)
+    # 随机跳过部分数据源（降低指纹）
+    if len(search_urls) > 6 and random.random() > 0.3:
+        skip_count = random.randint(1, min(3, len(search_urls) // 4))
         skip_indices = set(random.sample(range(len(search_urls)), skip_count))
-        log.info(f"🎲 本轮随机跳过 {skip_count} 个数据源")
+        log.info(f"🎲 本轮随机跳过 {skip_count}/{len(search_urls)} 个搜索")
     else:
         skip_indices = set()
 
@@ -95,14 +100,12 @@ async def capture_screenshots(trip):
                 ignore_default_args=["--enable-automation"],
             )
 
-            # 住宅代理
             if PROXY_URL:
                 launch_opts["proxy"] = {"server": PROXY_URL}
-                log.info(f"🏠 使用住宅代理: {PROXY_URL.split('@')[-1] if '@' in PROXY_URL else PROXY_URL}")
+                log.info(f"🏠 代理: {PROXY_URL.split('@')[-1] if '@' in PROXY_URL else PROXY_URL}")
 
             context = await p.chromium.launch_persistent_context(**launch_opts)
 
-            # 对整个 context 注入 stealth（所有新页面自动生效）
             stealth = Stealth(
                 navigator_languages_override=("ja", "ja-JP"),
                 navigator_platform_override="Win32",

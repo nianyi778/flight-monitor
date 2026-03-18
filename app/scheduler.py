@@ -14,7 +14,7 @@ from app.db import (
     get_active_trips, update_trip_best_price, save_to_db,
     already_checked_this_hour,
 )
-from app.scraper import capture_screenshots
+from app.scraper import capture_screenshots, capture_screenshots_batch
 from app.analyzer import analyze_all_screenshots
 from app.matcher import find_best_combinations
 from app.notifier import tg_send, format_alert_message, _brief_price
@@ -62,16 +62,79 @@ async def push_until_ack(msg):
             break
 
 
+def _get_check_interval_for_trip(trip):
+    """根据出发倒计时决定检查频率（秒）"""
+    from datetime import datetime
+    try:
+        ob_date = datetime.strptime(trip["outbound_date"], "%Y-%m-%d").date()
+        days = (ob_date - now_jst().date()).days
+        if days <= 0:
+            return None  # 已过期
+        elif days <= 30:
+            return 3600      # <30天：每小时
+        elif days <= 90:
+            return 3600 * 3  # 30-90天：每3小时
+        else:
+            return 3600 * 6  # >90天：每6小时
+    except:
+        return 3600
+
+
+def _trip_should_check(trip, state):
+    """判断该行程本轮是否需要检查"""
+    interval = _get_check_interval_for_trip(trip)
+    if interval is None:
+        return False  # 已过期
+
+    last_key = f"trip_{trip['id']}_last_check"
+    last_check = state.get(last_key)
+    if not last_check:
+        return True
+
+    from datetime import datetime
+    try:
+        last_dt = datetime.fromisoformat(last_check)
+        elapsed = (now_jst() - last_dt).total_seconds()
+        return elapsed >= interval
+    except:
+        return True
+
+
+def _collect_unique_searches(trips):
+    """收集所有行程的搜索URL，按(url)去重，记录每个URL关联的行程"""
+    from app.matcher import get_search_urls
+
+    url_map = {}  # url -> {"search": {...}, "trip_ids": []}
+    trip_search_map = {}  # trip_id -> [search_keys]
+
+    for trip in trips:
+        searches = get_search_urls(trip)
+        trip_search_map[trip["id"]] = []
+        for s in searches:
+            url = s["url"]
+            if url not in url_map:
+                url_map[url] = {"search": s, "trip_ids": []}
+            url_map[url]["trip_ids"].append(trip["id"])
+            trip_search_map[trip["id"]].append(url)
+
+    return url_map, trip_search_map
+
+
 async def run_check(force=False):
-    """执行一次完整的价格检查（遍历所有 active 行程）"""
+    """
+    智能巡查：
+    1. 按出发倒计时分频（<30天每小时，30-90天每3小时，>90天每6小时）
+    2. 相同日期的搜索去重（多行程共享截图+分析结果）
+    3. 结果分发到各行程
+    """
     import app.bot as bot_module
 
     if not force and already_checked_this_hour():
         log.info("⏭ 本小时已检查过，跳过（重启不重复查询）")
         return
 
-    trips = get_active_trips()
-    if not trips:
+    all_trips = get_active_trips()
+    if not all_trips:
         log.warning("没有 active 行程，跳过检查")
         return
 
@@ -80,29 +143,84 @@ async def run_check(force=False):
     state = load_state()
     check_count = state.get("check_count", 0) + 1
     state["check_count"] = check_count
-    save_state(state)
 
-    brief_lines = [f"🕐 *{now_jst().strftime('%H:%M')} 巡查报告* (第{check_count}次)\n"]
+    # 1. 筛选本轮需要检查的行程
+    if force:
+        due_trips = all_trips
+    else:
+        due_trips = [t for t in all_trips if _trip_should_check(t, state)]
 
-    for trip in trips:
-        log.info("=" * 50)
-        log.info(f"✈️ 检查行程#{trip['id']}: {trip['outbound_date']} → {trip['return_date']} (预算¥{trip['budget']})")
+    skipped = len(all_trips) - len(due_trips)
+    if not due_trips:
+        log.info(f"⏭ {len(all_trips)} 个行程均未到检查时间")
+        save_state(state)
+        bot_module.checking_in_progress = False
+        return
 
-        screenshots = await capture_screenshots(trip)
-        if not screenshots:
-            log.error(f"行程#{trip['id']} 未获取到截图")
-            brief_lines.append(f"❌ 行程#{trip['id']} 抓取失败")
-            continue
+    if skipped > 0:
+        log.info(f"📋 本轮检查 {len(due_trips)}/{len(all_trips)} 个行程（{skipped}个未到频率）")
 
-        results = analyze_all_screenshots(screenshots)
+    # 2. 收集去重后的搜索URL
+    url_map, trip_search_map = _collect_unique_searches(due_trips)
+    total_unique = len(url_map)
+    total_raw = sum(len(v) for v in trip_search_map.values())
+    saved = total_raw - total_unique
+
+    log.info(f"🔍 搜索去重: {total_raw}个 → {total_unique}个（节省{saved}次抓取）")
+
+    # 3. 统一抓取去重后的截图
+    from app.matcher import get_search_urls
+    unique_searches = [v["search"] for v in url_map.values()]
+
+    # 用第一个行程的 trip 对象启动浏览器（只需要 browser profile）
+    screenshots = await capture_screenshots_batch(unique_searches)
+    if not screenshots:
+        log.error("未获取到任何截图")
+        bot_module.checking_in_progress = False
+        return
+
+    log.info(f"获取到 {len(screenshots)} 张截图")
+
+    # 4. 统一 LLM 分析
+    all_analysis = {}  # url -> analysis_result
+    for ss in screenshots:
+        from app.analyzer import analyze_screenshot
+        analysis = analyze_screenshot(ss)
+        analysis["source"] = ss["name"]
+        analysis["url"] = ss["url"]
+        analysis["flight_date"] = ss.get("flight_date", "")
+        all_analysis[ss["url"]] = analysis
+
+        if analysis.get("error"):
+            log.warning(f"  ⚠️ {analysis['error']}")
+        elif analysis.get("flights"):
+            log.info(f"  ✓ {len(analysis['flights'])} 个航班, 最低 ¥{analysis.get('lowest_price', '?')}")
+
+    # 5. 分发结果到各行程
+    brief_lines = [f"🕐 *{now_jst().strftime('%H:%M')} 巡查报告* (第{check_count}次 | {len(due_trips)}个行程 {total_unique}次抓取)\n"]
+
+    for trip in due_trips:
+        # 重组该行程的 results
+        results = {"outbound": [], "return": [], "timestamp": now_jst().isoformat()}
+        for url in trip_search_map.get(trip["id"], []):
+            if url in all_analysis:
+                a = all_analysis[url]
+                direction = "outbound" if any(
+                    s["url"] == url and s["direction"] == "outbound"
+                    for s in get_search_urls(trip)
+                ) else "return"
+                results[direction].append(a)
+
         combos = find_best_combinations(results, trip)
         save_to_db(results, combos, trip)
+
+        # 更新检查时间
+        state[f"trip_{trip['id']}_last_check"] = now_jst().isoformat()
 
         best_total = combos[0]["total"] if combos else None
         prev_best = trip.get("best_price")
         budget = trip["budget"]
 
-        # 更新历史最低
         if best_total:
             update_trip_best_price(trip["id"], best_total)
 
@@ -119,7 +237,6 @@ async def run_check(force=False):
             save_state(s)
             await push_until_ack(msg)
         else:
-            # 简报
             trend = ""
             if prev_best and best_total:
                 if best_total < prev_best:
@@ -132,7 +249,6 @@ async def run_check(force=False):
             diff = f"¥{best_total - budget}" if best_total else "?"
             new_best = min(best_total or 99999, prev_best or 99999)
 
-            # 提取去程/回程最优航班详情
             best_ob = combos[0]["outbound"] if combos else {}
             best_rt = combos[0]["return"] if combos else {}
 
@@ -141,17 +257,22 @@ async def run_check(force=False):
             ob_info = f"{best_ob.get('airline', '?')} {best_ob.get('departure_time', '')}→{best_ob.get('arrival_time', '')} {_brief_price(best_ob)} ({best_ob.get('_source', '')}){ob_date_tag}" if best_ob else "无数据"
             rt_info = f"{best_rt.get('airline', '?')} {best_rt.get('departure_time', '')}→{best_rt.get('arrival_time', '')} {_brief_price(best_rt)} ({best_rt.get('_source', '')}){rt_date_tag}" if best_rt else "无数据"
 
+            interval = _get_check_interval_for_trip(trip)
+            freq = f"{interval//3600}h" if interval else "?"
+
             brief_lines.append(
-                f"✈️ *#{trip['id']}* {trip['outbound_date']}→{trip['return_date']} (预算¥{budget})\n"
-                f"  最低往返: ¥{best_total or '?'}(CNY){trend} | 差预算: {diff}\n"
-                f"  去程: {ob_info}\n"
-                f"  回程: {rt_info}\n"
-                f"  历史最低: ¥{new_best if new_best < 99999 else '?'}(CNY)"
+                f"✈️ *#{trip['id']}* {trip['outbound_date']}→{trip['return_date']} (¥{budget} 频率{freq})\n"
+                f"  最低: ¥{best_total or '?'}{trend} | 差预算: {diff}\n"
+                f"  去: {ob_info}\n"
+                f"  回: {rt_info}\n"
+                f"  历史最低: ¥{new_best if new_best < 99999 else '?'}"
             )
 
-    # 发送汇总简报（没有触发好价推送时）
-    state = load_state()
-    if not state.get("pending_ack") and len(brief_lines) > 1:
+    save_state(state)
+
+    # 发送汇总简报
+    s = load_state()
+    if not s.get("pending_ack") and len(brief_lines) > 1:
         tg_send("\n\n".join(brief_lines))
 
     bot_module.checking_in_progress = False
