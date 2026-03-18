@@ -211,8 +211,41 @@ async def run_check(force=False):
                 ) else "return"
                 results[direction].append(a)
 
+        # 春秋官网直销价（零成本、100%准确）
+        from app.spring_api import get_spring_price_for_trip
+        spring = get_spring_price_for_trip(trip)
+        spring_best = spring.get("best_combo")
+
         combos = find_best_combinations(results, trip)
         save_to_db(results, combos, trip)
+
+        # 如果春秋官网比携程/Google更便宜，插入到 combos 最前面
+        if spring_best and spring_best.get("total_cny"):
+            ota_best = combos[0]["total"] if combos else 99999
+            if spring_best["total_cny"] < ota_best:
+                log.info(f"  🌸 春秋官网更便宜: ¥{spring_best['total_cny']} vs OTA ¥{ota_best}")
+                combos.insert(0, {
+                    "outbound": {
+                        "airline": "春秋航空(官网直销)",
+                        "departure_time": "", "arrival_time": "",
+                        "price_cny": spring_best["outbound_cny"],
+                        "original_currency": "USD",
+                        "_source": "春秋官网",
+                        "_url": f"https://en.ch.com/NRT-PVG/?date={spring_best['outbound_date']}",
+                        "_flight_date": spring_best["outbound_date"],
+                    },
+                    "return": {
+                        "airline": "春秋航空(官网直销)",
+                        "departure_time": "", "arrival_time": "",
+                        "price_cny": spring_best["return_cny"],
+                        "original_currency": "USD",
+                        "_source": "春秋官网",
+                        "_url": f"https://en.ch.com/PVG-NRT/?date={spring_best['return_date']}",
+                        "_flight_date": spring_best["return_date"],
+                    },
+                    "total": spring_best["total_cny"],
+                    "within_budget": spring_best["total_cny"] <= trip["budget"],
+                })
 
         # 更新检查时间
         state[f"trip_{trip['id']}_last_check"] = now_jst().isoformat()
