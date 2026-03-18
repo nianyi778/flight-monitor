@@ -4,9 +4,10 @@ on:
   push:
     branches: [main]
     paths:
-      - "flight_monitor.py"
+      - "app/**"
       - "Dockerfile"
       - "requirements.txt"
+      - "main.py"
   workflow_dispatch:
 
 env:

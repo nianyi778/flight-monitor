@@ -6,7 +6,7 @@ import requests
 
 from app.config import (
     TG_BOT_TOKEN, TG_CHAT_ID, ACK_KEYWORD,
-    now_jst, log, load_state, save_state,
+    now_jst, log,
 )
 
 
@@ -34,39 +34,6 @@ def tg_send(text, parse_mode="Markdown"):
         log.error(f"TG 发送失败: {e}")
         return False
 
-
-def tg_check_ack():
-    if not TG_BOT_TOKEN or not TG_CHAT_ID:
-        return False
-
-    try:
-        state = load_state()
-        last_update_id = state.get("last_tg_update_id", 0)
-
-        resp = requests.get(
-            f"https://api.telegram.org/bot{TG_BOT_TOKEN}/getUpdates",
-            params={"offset": last_update_id + 1, "timeout": 1},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        updates = resp.json().get("result", [])
-
-        for update in updates:
-            msg = update.get("message", {})
-            text = msg.get("text", "")
-            chat_id = str(msg.get("chat", {}).get("id", ""))
-            state["last_tg_update_id"] = update["update_id"]
-
-            if chat_id == str(TG_CHAT_ID) and ACK_KEYWORD in text:
-                save_state(state)
-                return True
-
-        save_state(state)
-        return False
-
-    except Exception as e:
-        log.error(f"TG 检查确认失败: {e}")
-        return False
 
 
 def _price_str(f):

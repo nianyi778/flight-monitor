@@ -87,7 +87,7 @@ app/
 |------|------|------|
 | `LLM_BASE_URL` | ✅ | LLM API 地址（OpenAI 兼容） |
 | `LLM_API_KEY` | ✅ | LLM API Key |
-| `LLM_MODEL` | | 模型名，默认 `gpt-4o`（实际携程用 mini） |
+| `LLM_MODEL` | | 模型名，默认 `gpt-4o`（实际分析全部用 `gpt-4o-mini`，此变量仅供 health check 展示） |
 | `TG_BOT_TOKEN` | ✅ | Telegram Bot Token |
 | `TG_CHAT_ID` | ✅ | Telegram 私聊 Chat ID |
 | `TG_GROUP_IDS` | | 群聊 Chat ID（逗号分隔） |
@@ -219,6 +219,7 @@ ORDER BY min_price;
 
 | 版本 | 主要更新 |
 |------|---------|
+| v3.7 | LLM 并行分析（4线程），删除死代码 tg_check_ack |
 | v3.6 | 全机场覆盖 NRT/HND⇄PVG/SHA |
 | v3.5 | 春秋航空官网 API 直连 |
 | v3.4 | 全部用 gpt-4o-mini（成本降95%） |

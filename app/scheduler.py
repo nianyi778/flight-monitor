@@ -181,20 +181,28 @@ async def run_check(force=False):
 
     log.info(f"获取到 {len(screenshots)} 张截图")
 
-    # 4. 统一 LLM 分析
+    # 4. 统一 LLM 分析（并行）
+    from app.analyzer import analyze_screenshot
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     all_analysis = {}  # url -> analysis_result
-    for ss in screenshots:
-        from app.analyzer import analyze_screenshot
+
+    def _analyze(ss):
         analysis = analyze_screenshot(ss)
         analysis["source"] = ss["name"]
         analysis["url"] = ss["url"]
         analysis["flight_date"] = ss.get("flight_date", "")
-        all_analysis[ss["url"]] = analysis
+        return ss["url"], analysis
 
-        if analysis.get("error"):
-            log.warning(f"  ⚠️ {analysis['error']}")
-        elif analysis.get("flights"):
-            log.info(f"  ✓ {len(analysis['flights'])} 个航班, 最低 ¥{analysis.get('lowest_price', '?')}")
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {executor.submit(_analyze, ss): ss for ss in screenshots}
+        for future in as_completed(futures):
+            url, analysis = future.result()
+            all_analysis[url] = analysis
+            if analysis.get("error"):
+                log.warning(f"  ⚠️ {analysis['error']}")
+            elif analysis.get("flights"):
+                log.info(f"  ✓ {len(analysis['flights'])} 个航班, 最低 ¥{analysis.get('lowest_price', '?')}")
 
     # 5. 分发结果到各行程
     brief_lines = [f"🕐 *{now_jst().strftime('%H:%M')} 巡查报告* (第{check_count}次 | {len(due_trips)}个行程 {total_unique}次抓取)\n"]

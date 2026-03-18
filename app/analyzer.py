@@ -1,7 +1,8 @@
 """
 LLM 视觉分析模块
-- 携程截图：gpt-4o-mini + detail:low + 短prompt（便宜快速准确）
-- Google JP截图：gpt-4o + detail:high（日文+日元需要更强模型）
+- 全部数据源：gpt-4o-mini + detail:low（经测试，mini 在此场景比 4o 更稳定，成本低95%）
+- 携程截图：短 prompt，直接提取 CNY 价格
+- Google JP 截图：带日元换算 prompt
 """
 
 import base64
