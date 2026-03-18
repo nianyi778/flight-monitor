@@ -219,6 +219,7 @@ ORDER BY min_price;
 
 | 版本 | 主要更新 |
 |------|---------|
+| v3.8 | 修复日志时区（%(asctime)s 统一显示 JST） |
 | v3.7 | LLM 并行分析（4线程），删除死代码 tg_check_ack |
 | v3.6 | 全机场覆盖 NRT/HND⇄PVG/SHA |
 | v3.5 | 春秋航空官网 API 直连 |
