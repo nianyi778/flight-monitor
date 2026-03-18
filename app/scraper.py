@@ -120,7 +120,8 @@ async def _run_context(p, profile_subdir, searches, timestamp, label):
                 await asyncio.sleep(delay)
 
             page = await context.new_page()
-            ss_name = f"{timestamp}_{search['name']}_{search['direction']}.png"
+            date_tag = f"_{search['flight_date']}" if search.get("flight_date") else ""
+            ss_name = f"{timestamp}_{search['name']}{date_tag}_{search['direction']}.png"
             ss_path = SCREENSHOT_DIR / ss_name
 
             try:
