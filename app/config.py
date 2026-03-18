@@ -54,14 +54,24 @@ BROWSER_PROFILE = DATA_DIR / "browser_profile"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(DATA_DIR / "monitor.log", encoding="utf-8"),
-    ] if DATA_DIR.exists() else [logging.StreamHandler()]
-)
+class _JSTFormatter(logging.Formatter):
+    """让 %(asctime)s 显示 JST 而非容器本地时间（通常是 UTC）"""
+    def formatTime(self, record, datefmt=None):
+        ct = datetime.fromtimestamp(record.created, JST)
+        if datefmt:
+            return ct.strftime(datefmt)
+        return ct.strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
+
+
+_fmt = _JSTFormatter("%(asctime)s [%(levelname)s] %(message)s")
+_handlers = [logging.StreamHandler()]
+if DATA_DIR.exists():
+    _fh = logging.FileHandler(DATA_DIR / "monitor.log", encoding="utf-8")
+    _fh.setFormatter(_fmt)
+    _handlers.append(_fh)
+_handlers[0].setFormatter(_fmt)
+
+logging.basicConfig(level=logging.INFO, handlers=_handlers)
 log = logging.getLogger("flight_monitor")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
