@@ -78,16 +78,15 @@ def analyze_screenshot(screenshot_info):
     img_b64 = image_to_base64(screenshot_info["path"])
     source = screenshot_info.get("name", "")
 
-    # 携程 → mini模型 + 短prompt + low detail（快、准、省）
-    if "携程" in source:
+    # 全部用 mini + low detail（经测试，mini 比 full 更稳定）
+    if "Google" in source or "google" in source:
+        model = "gpt-4o-mini"
+        prompt = _GOOGLE_JP_PROMPT
+        detail = "low"
+    else:
         model = "gpt-4o-mini"
         prompt = _CTRIP_PROMPT
         detail = "low"
-    # Google JP → 强模型 + 详细prompt + high detail（日文+日元）
-    else:
-        model = LLM_MODEL  # gpt-4o
-        prompt = _GOOGLE_JP_PROMPT
-        detail = "high"
 
     try:
         content = _call_llm(prompt, img_b64, model, detail)
