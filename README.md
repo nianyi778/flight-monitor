@@ -219,6 +219,7 @@ ORDER BY min_price;
 
 | 版本 | 主要更新 |
 |------|---------|
+| v3.9 | 新增 GET /health HTTP 端点（DB 状态 + 系统信息，供外部监控轮询，降级时返回 503） |
 | v3.8 | 修复日志时区（%(asctime)s 统一显示 JST） |
 | v3.7 | LLM 并行分析（4线程），删除死代码 tg_check_ack |
 | v3.6 | 全机场覆盖 NRT/HND⇄PVG/SHA |

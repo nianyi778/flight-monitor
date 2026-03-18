@@ -7,6 +7,8 @@ MCP Server - 让其他 AI Agent 发现和操作机票监控系统
 
 from datetime import datetime
 from fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from app.config import now_jst, log, load_state
 from app.db import get_db, get_active_trips
@@ -453,3 +455,54 @@ def resource_system_status() -> str:
         f"检查间隔: ~{CHECK_INTERVAL // 60}分钟\n"
         f"时间: {now_jst().strftime('%Y-%m-%d %H:%M')} JST"
     )
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# HTTP /health 端点（供外部监控轮询）
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@mcp.custom_route("/health", methods=["GET"])
+async def http_health(request: Request) -> JSONResponse:
+    """
+    轻量健康检查，不调用 LLM/代理（避免每次轮询产生费用）。
+    只检查 DB 连通性 + 系统状态。
+
+    返回示例：
+    {
+      "status": "ok",          // ok / degraded
+      "database": "ok",        // ok / error: <msg>
+      "active_trips": 2,
+      "check_count": 48,
+      "server_time_jst": "2026-03-18 15:30:00"
+    }
+    """
+    from app.config import LLM_MODEL, CHECK_INTERVAL
+
+    result: dict = {}
+
+    # DB 检查
+    try:
+        db = get_db()
+        c = db.cursor()
+        c.execute("SELECT COUNT(*) FROM trips WHERE status='active'")
+        active_trips = c.fetchone()[0]
+        db.close()
+        result["database"] = "ok"
+        result["active_trips"] = active_trips
+    except Exception as e:
+        result["database"] = f"error: {e}"
+        result["active_trips"] = None
+
+    # 系统状态
+    state = load_state()
+    result["check_count"] = state.get("check_count", 0)
+    result["boot_count"] = state.get("boot_count", 0)
+    result["server_time_jst"] = now_jst().strftime("%Y-%m-%d %H:%M:%S")
+    result["llm_model"] = LLM_MODEL
+    result["check_interval_s"] = CHECK_INTERVAL
+
+    # 整体状态
+    result["status"] = "ok" if result["database"] == "ok" else "degraded"
+
+    status_code = 200 if result["status"] == "ok" else 503
+    return JSONResponse(result, status_code=status_code)
