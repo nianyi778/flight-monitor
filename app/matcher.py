@@ -18,18 +18,30 @@ def _date_range(base_date_str, flex_days, direction="before"):
     return dates
 
 
+def _effective_flex(trip, days_to_depart):
+    """根据倒计时动态决定 flex 天数"""
+    if days_to_depart > 90:
+        return 0, 0          # 远期：不搜弹性日期
+    elif days_to_depart <= 30:
+        return trip.get("outbound_flex", 0), min(trip.get("return_flex", 1) + 1, 3)  # 临近：回程多搜1天
+    else:
+        return trip.get("outbound_flex", 0), trip.get("return_flex", 1)
+
+
 def get_search_urls(trip):
-    """根据行程生成搜索 URL（支持弹性日期）"""
-    ob_dates = _date_range(trip["outbound_date"], trip.get("outbound_flex", 0), "before")
-    rt_dates = _date_range(trip["return_date"], trip.get("return_flex", 1), "before")
+    """根据行程生成搜索 URL（支持弹性日期，按倒计时自动收缩）"""
+    days_to_depart = (datetime.strptime(trip["outbound_date"], "%Y-%m-%d").date() - datetime.now().date()).days
+    ob_flex, rt_flex = _effective_flex(trip, days_to_depart)
+
+    ob_dates = _date_range(trip["outbound_date"], ob_flex, "before")
+    rt_dates = _date_range(trip["return_date"], rt_flex, "before")
 
     urls = []
 
-    # 搜索模板 - 覆盖所有机场组合
-    # 东京: NRT(成田) + HND(羽田)
-    # 上海: PVG(浦东) + SHA(虹桥)
+    # 搜索模板 - 东京(NRT/HND) × 上海浦东(PVG)
+    # SHA(虹桥)廉航覆盖率低，不纳入搜索
     templates = [
-        # ━━━ 携程: 4个机场组合 ━━━
+        # ━━━ 携程: NRT/HND → PVG ━━━
         ("携程_NRT_PVG", "outbound", "NRT-PVG",
          "https://flights.ctrip.com/online/list/oneway-NRT-PVG?depdate={date}&cabin=y&adult=1&child=0&infant=0"),
         ("携程_NRT_PVG", "return", "PVG-NRT",
@@ -38,14 +50,6 @@ def get_search_urls(trip):
          "https://flights.ctrip.com/online/list/oneway-HND-PVG?depdate={date}&cabin=y&adult=1&child=0&infant=0"),
         ("携程_HND_PVG", "return", "PVG-HND",
          "https://flights.ctrip.com/online/list/oneway-PVG-HND?depdate={date}&cabin=y&adult=1&child=0&infant=0"),
-        ("携程_NRT_SHA", "outbound", "NRT-SHA",
-         "https://flights.ctrip.com/online/list/oneway-NRT-SHA?depdate={date}&cabin=y&adult=1&child=0&infant=0"),
-        ("携程_NRT_SHA", "return", "SHA-NRT",
-         "https://flights.ctrip.com/online/list/oneway-SHA-NRT?depdate={date}&cabin=y&adult=1&child=0&infant=0"),
-        ("携程_HND_SHA", "outbound", "HND-SHA",
-         "https://flights.ctrip.com/online/list/oneway-HND-SHA?depdate={date}&cabin=y&adult=1&child=0&infant=0"),
-        ("携程_HND_SHA", "return", "SHA-HND",
-         "https://flights.ctrip.com/online/list/oneway-SHA-HND?depdate={date}&cabin=y&adult=1&child=0&infant=0"),
         # ━━━ Google JP: NRT⇄PVG (聚合比价) ━━━
         ("Google_JP", "outbound", "NRT-PVG",
          "https://www.google.co.jp/travel/flights?q=Flights+from+NRT+to+PVG+on+{date}+one+way&curr=JPY&hl=ja"),

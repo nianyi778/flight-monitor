@@ -181,14 +181,22 @@ async def run_check(force=False):
 
     log.info(f"获取到 {len(screenshots)} 张截图")
 
-    # 4. 统一 LLM 分析（并行）
+    # 4. 统一 LLM 分析（并行，截图预校验过滤无效截图）
     from app.analyzer import analyze_screenshot
     from concurrent.futures import ThreadPoolExecutor, as_completed
+    import os
+
+    _MIN_SCREENSHOT_SIZE = 30 * 1024  # 30KB 以下大概率是登录页/验证码
 
     all_analysis = {}  # url -> analysis_result
 
     def _analyze(ss):
-        analysis = analyze_screenshot(ss)
+        size = os.path.getsize(ss["path"])
+        if size < _MIN_SCREENSHOT_SIZE:
+            log.warning(f"  ⚠️ 截图过小({size//1024}KB)，跳过LLM: {ss['name']}")
+            analysis = {"flights": [], "lowest_price": None, "error": f"截图过小({size//1024}KB)，疑似登录页/验证码"}
+        else:
+            analysis = analyze_screenshot(ss)
         analysis["source"] = ss["name"]
         analysis["url"] = ss["url"]
         analysis["flight_date"] = ss.get("flight_date", "")

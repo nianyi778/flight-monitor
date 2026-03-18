@@ -219,6 +219,7 @@ ORDER BY min_price;
 
 | 版本 | 主要更新 |
 |------|---------|
+| v3.13 | 抓取提速：砍SHA路线/携程+Google并行双context/等待价格元素替代固定sleep/截图预校验/弹性日期按倒计时收缩 |
 | v3.12 | 修复 TG 推送 400：Markdown 失败自动降级纯文本，去掉提醒消息多余 Markdown |
 | v3.11 | 修复架构：改为 linux/arm64（服务器为 aarch64） |
 | v3.10 | 修复 amd64 构建（改用 docker buildx，避免 OrbStack 混入 arm64 缓存） |
