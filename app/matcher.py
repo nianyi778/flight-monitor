@@ -25,17 +25,28 @@ def get_search_urls(trip):
 
     urls = []
 
-    # 搜索模板
+    # 搜索模板 - 覆盖所有机场组合
+    # 东京: NRT(成田) + HND(羽田)
+    # 上海: PVG(浦东) + SHA(虹桥)
     templates = [
-        # (name, direction, airport_pair, base_url_template)
-        ("携程", "outbound", "NRT-PVG",
+        # ━━━ 携程: 4个机场组合 ━━━
+        ("携程_NRT_PVG", "outbound", "NRT-PVG",
          "https://flights.ctrip.com/online/list/oneway-NRT-PVG?depdate={date}&cabin=y&adult=1&child=0&infant=0"),
-        ("携程", "return", "PVG-NRT",
+        ("携程_NRT_PVG", "return", "PVG-NRT",
          "https://flights.ctrip.com/online/list/oneway-PVG-NRT?depdate={date}&cabin=y&adult=1&child=0&infant=0"),
-        ("携程_HND", "outbound", "HND-PVG",
+        ("携程_HND_PVG", "outbound", "HND-PVG",
          "https://flights.ctrip.com/online/list/oneway-HND-PVG?depdate={date}&cabin=y&adult=1&child=0&infant=0"),
-        ("携程_HND", "return", "PVG-HND",
+        ("携程_HND_PVG", "return", "PVG-HND",
          "https://flights.ctrip.com/online/list/oneway-PVG-HND?depdate={date}&cabin=y&adult=1&child=0&infant=0"),
+        ("携程_NRT_SHA", "outbound", "NRT-SHA",
+         "https://flights.ctrip.com/online/list/oneway-NRT-SHA?depdate={date}&cabin=y&adult=1&child=0&infant=0"),
+        ("携程_NRT_SHA", "return", "SHA-NRT",
+         "https://flights.ctrip.com/online/list/oneway-SHA-NRT?depdate={date}&cabin=y&adult=1&child=0&infant=0"),
+        ("携程_HND_SHA", "outbound", "HND-SHA",
+         "https://flights.ctrip.com/online/list/oneway-HND-SHA?depdate={date}&cabin=y&adult=1&child=0&infant=0"),
+        ("携程_HND_SHA", "return", "SHA-HND",
+         "https://flights.ctrip.com/online/list/oneway-SHA-HND?depdate={date}&cabin=y&adult=1&child=0&infant=0"),
+        # ━━━ Google JP: NRT⇄PVG (聚合比价) ━━━
         ("Google_JP", "outbound", "NRT-PVG",
          "https://www.google.co.jp/travel/flights?q=Flights+from+NRT+to+PVG+on+{date}+one+way&curr=JPY&hl=ja"),
         ("Google_JP", "return", "PVG-NRT",

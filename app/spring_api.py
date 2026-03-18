@@ -117,51 +117,63 @@ def get_spring_price_for_trip(trip):
         "source": "春秋官网",
     }
 
-    # 去程价格
-    ob_prices = fetch_spring_prices("NRT", "PVG", ob_month)
-    if ob_date in ob_prices:
-        result["outbound"] = {"date": ob_date, **ob_prices[ob_date]}
-
-    # 去程弹性日期
     from datetime import datetime, timedelta
-    for i in range(1, ob_flex + 1):
-        flex_date = str((datetime.strptime(ob_date, "%Y-%m-%d") - timedelta(days=i)).date())
-        if flex_date in ob_prices:
-            result["outbound_flex"][flex_date] = ob_prices[flex_date]
 
-    # 回程价格
-    rt_prices = fetch_spring_prices("PVG", "NRT", rt_month)
-    if rt_date in rt_prices:
-        result["return"] = {"date": rt_date, **rt_prices[rt_date]}
+    # 搜索所有机场组合，取最便宜的
+    # 去程: NRT→PVG, NRT→SHA, HND→PVG, HND→SHA
+    ob_routes = [("NRT", "PVG"), ("NRT", "SHA"), ("HND", "PVG"), ("HND", "SHA")]
+    # 回程: PVG→NRT, SHA→NRT, PVG→HND, SHA→HND
+    rt_routes = [("PVG", "NRT"), ("SHA", "NRT"), ("PVG", "HND"), ("SHA", "HND")]
 
-    # 回程弹性日期
-    for i in range(1, rt_flex + 1):
-        flex_date = str((datetime.strptime(rt_date, "%Y-%m-%d") - timedelta(days=i)).date())
-        if flex_date in rt_prices:
-            result["return_flex"][flex_date] = rt_prices[flex_date]
-
-    # 找最优组合（含弹性日期）
-    all_ob = {}
-    if result["outbound"]:
-        all_ob[ob_date] = result["outbound"]["price_cny"]
-    for d, p in result["outbound_flex"].items():
-        all_ob[d] = p["price_cny"]
-
+    all_ob = {}  # {(date, origin, dest): price_cny}
     all_rt = {}
-    if result["return"]:
-        all_rt[rt_date] = result["return"]["price_cny"]
-    for d, p in result["return_flex"].items():
-        all_rt[d] = p["price_cny"]
 
+    for origin, dest in ob_routes:
+        prices = fetch_spring_prices(origin, dest, ob_month)
+        # 目标日期
+        if ob_date in prices:
+            key = (ob_date, origin, dest)
+            all_ob[key] = prices[ob_date]["price_cny"]
+            if result["outbound"] is None or prices[ob_date]["price_cny"] < result["outbound"].get("price_cny", 99999):
+                result["outbound"] = {"date": ob_date, "route": f"{origin}→{dest}", **prices[ob_date]}
+        # 弹性日期
+        for i in range(1, ob_flex + 1):
+            flex_date = str((datetime.strptime(ob_date, "%Y-%m-%d") - timedelta(days=i)).date())
+            if flex_date in prices:
+                key = (flex_date, origin, dest)
+                all_ob[key] = prices[flex_date]["price_cny"]
+                result["outbound_flex"][f"{flex_date}_{origin}_{dest}"] = {
+                    "route": f"{origin}→{dest}", **prices[flex_date]
+                }
+
+    for origin, dest in rt_routes:
+        prices = fetch_spring_prices(origin, dest, rt_month)
+        if rt_date in prices:
+            key = (rt_date, origin, dest)
+            all_rt[key] = prices[rt_date]["price_cny"]
+            if result["return"] is None or prices[rt_date]["price_cny"] < result["return"].get("price_cny", 99999):
+                result["return"] = {"date": rt_date, "route": f"{origin}→{dest}", **prices[rt_date]}
+        for i in range(1, rt_flex + 1):
+            flex_date = str((datetime.strptime(rt_date, "%Y-%m-%d") - timedelta(days=i)).date())
+            if flex_date in prices:
+                key = (flex_date, origin, dest)
+                all_rt[key] = prices[flex_date]["price_cny"]
+                result["return_flex"][f"{flex_date}_{origin}_{dest}"] = {
+                    "route": f"{origin}→{dest}", **prices[flex_date]
+                }
+
+    # 找全局最优组合
     if all_ob and all_rt:
-        best_ob_date = min(all_ob, key=all_ob.get)
-        best_rt_date = min(all_rt, key=all_rt.get)
+        best_ob_key = min(all_ob, key=all_ob.get)
+        best_rt_key = min(all_rt, key=all_rt.get)
         result["best_combo"] = {
-            "outbound_date": best_ob_date,
-            "outbound_cny": all_ob[best_ob_date],
-            "return_date": best_rt_date,
-            "return_cny": all_rt[best_rt_date],
-            "total_cny": all_ob[best_ob_date] + all_rt[best_rt_date],
+            "outbound_date": best_ob_key[0],
+            "outbound_route": f"{best_ob_key[1]}→{best_ob_key[2]}",
+            "outbound_cny": all_ob[best_ob_key],
+            "return_date": best_rt_key[0],
+            "return_route": f"{best_rt_key[1]}→{best_rt_key[2]}",
+            "return_cny": all_rt[best_rt_key],
+            "total_cny": all_ob[best_ob_key] + all_rt[best_rt_key],
         }
 
     if result["outbound"] and result["return"]:
