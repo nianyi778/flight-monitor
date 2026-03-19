@@ -61,18 +61,18 @@ def _parse_time_str(time_str: str) -> str:
 
 def _query_fast_flights(origin, destination, date_str):
     """
-    调用 fast-flights v2 API
+    调用 fast-flights v2.2 API
     返回 (Result | None, Exception | None)
     """
     try:
-        from fast_flights import FlightData, Passengers, get_flights
-        result = get_flights(
-            flight_data=[FlightData(date=date_str, from_airport=origin, to_airport=destination)],
+        from fast_flights import FlightQuery, Passengers, create_query, get_flights
+        query = create_query(
+            flights=[FlightQuery(date=date_str, from_airport=origin, to_airport=destination)],
             trip="one-way",
             passengers=Passengers(adults=1),
             seat="economy",
-            fetch_mode="fallback",
         )
+        result = get_flights(query)
         return result, None
     except Exception as e:
         log.debug(f"  Google fast-flights 失败 {origin}→{destination}: {e}")

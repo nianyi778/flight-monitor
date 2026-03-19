@@ -5,8 +5,14 @@
 - 支持 NRT/PVG 双向
 """
 
-import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+try:
+    from curl_cffi import requests as requests
+    _IMPERSONATE = {"impersonate": "chrome"}
+except ImportError:
+    import requests  # type: ignore
+    _IMPERSONATE = {}
 
 from app.anti_bot import classify_exception
 from app.config import now_jst, log
@@ -46,6 +52,7 @@ def get_exchange_rates():
             "https://api.frankfurter.app/latest",
             params={"from": "USD", "to": "CNY,JPY"},
             timeout=8,
+            **_IMPERSONATE,
         )
         resp.raise_for_status()
         rates = resp.json().get("rates", {})
@@ -98,7 +105,8 @@ def fetch_spring_prices(origin, destination, year_month, session=None):
 
     requester = session or requests
     try:
-        resp = requester.post(_API_URL, headers=_HEADERS, data=data, timeout=15)
+        resp = requester.post(_API_URL, headers=_HEADERS, data=data, timeout=15,
+                              **_IMPERSONATE)
         resp.raise_for_status()
         result = resp.json()
 
@@ -171,7 +179,7 @@ def get_spring_price_for_trip(trip, proxy_url=None, proxy_id=None):
     if proxy_url:
         session.proxies = {"http": proxy_url, "https": proxy_url}
     try:
-        session.get("https://en.ch.com/", headers=_HEADERS, timeout=10)
+        session.get("https://en.ch.com/", headers=_HEADERS, timeout=10, **_IMPERSONATE)
     except Exception:
         pass  # warm-up 失败不影响主流程
 
