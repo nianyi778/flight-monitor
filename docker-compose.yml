@@ -13,7 +13,7 @@ services:
           memory: 512M
 
   flight-monitor:
-    image: ghcr.io/nianyi778/flight-monitor:v4.6
+    image: ghcr.io/nianyi778/flight-monitor:v4.7
     # 本地构建时改用: build: .
     container_name: flight-monitor
     restart: unless-stopped
