@@ -368,23 +368,13 @@ def _handle_trip_add(text):
 
 
 def _health_check():
-    """健康检查：LLM / 数据库 / 代理 / TG"""
-    from app.config import LLM_BASE_URL, LLM_API_KEY, LLM_MODEL, PROXY_URL
+    """健康检查：数据库 / 代理 / TG"""
+    from app.config import PROXY_URL
     import requests as req
 
     checks = {}
 
-    # 1. LLM
-    try:
-        r = req.post(f"{LLM_BASE_URL}/chat/completions",
-            headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"},
-            json={"model": LLM_MODEL, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 5},
-            timeout=10)
-        checks["llm"] = "✅" if r.ok else f"❌ {r.status_code}"
-    except Exception as e:
-        checks["llm"] = f"❌ {e}"
-
-    # 2. 数据库
+    # 1. 数据库
     try:
         with get_db() as db:
             c = db.cursor()
@@ -416,7 +406,7 @@ def _health_check():
 
 
 def _handle_status():
-    from app.config import LLM_BASE_URL, LLM_MODEL, PROXY_URL
+    from app.config import PROXY_URL
 
     s = load_state()
     trips = get_active_trips()
@@ -430,8 +420,6 @@ def _handle_status():
         f"🕐 {now_jst().strftime('%Y-%m-%d %H:%M')} JST",
         "",
         "━━━ 配置 ━━━",
-        f"🤖 模型: `{LLM_MODEL}`",
-        f"🔗 API: `{LLM_BASE_URL.split('//')[1][:30]}`",
         f"🏠 代理: `{PROXY_URL or '未配置'}`",
     ]
 
@@ -526,7 +514,6 @@ def _handle_callback(callback_id, data, message_id):
         tg_answer_callback(callback_id, "🩺 检查中...")
         checks = _health_check()
         lines = ["🩺 *健康检查*\n"]
-        lines.append(f"🤖 LLM: {checks['llm']}")
         lines.append(f"💾 数据库: {checks['db']}")
         lines.append(f"🏠 代理: {checks['proxy']}")
         lines.append(f"📱 TG Bot: {checks['tg']}")
@@ -761,7 +748,6 @@ async def tg_command_listener():
                 elif text == "/health":
                     checks = _health_check()
                     lines = ["🩺 *健康检查*\n"]
-                    lines.append(f"🤖 LLM: {checks['llm']}")
                     lines.append(f"💾 数据库: {checks['db']}")
                     lines.append(f"🏠 代理: {checks['proxy']}")
                     lines.append(f"📱 TG Bot: {checks['tg']}")
