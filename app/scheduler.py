@@ -493,9 +493,6 @@ async def main():
     log.info(f"   TG通知: {'已配置' if TG_BOT_TOKEN else '⚠️ 未配置'}")
     log.info("=" * 55)
 
-    # 配置检查
-    if not LLM_API_KEY:
-        log.warning("⚠️ LLM_API_KEY 未配置，截图+LLM 兜底不可用（API 模式下无影响）")
     # 设置 TG Bot 菜单命令
     setup_tg_commands()
 
