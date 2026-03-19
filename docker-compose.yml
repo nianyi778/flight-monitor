@@ -1,6 +1,6 @@
 services:
   flight-monitor:
-    image: ghcr.io/nianyi778/flight-monitor:v4.3
+    image: ghcr.io/nianyi778/flight-monitor:v4.4
     # 本地构建时改用: build: .
     container_name: flight-monitor
     restart: unless-stopped
