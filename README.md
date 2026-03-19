@@ -83,11 +83,125 @@ SSE 连接地址：`http://<host>:8081/sse`
 
 ## 部署
 
-### 前置条件
+### 第一步：创建 Telegram Bot
 
-- TiDB Cloud（或 MySQL 5.7+）— 建好三张表（见下文 SQL）
-- Telegram Bot Token + Chat ID
-- OpenAI 兼容的 LLM API Key（用于截图视觉分析）
+1. 在 Telegram 搜索 `@BotFather`，发送 `/newbot`，按提示填写名称
+2. 保存返回的 **Bot Token**（格式 `123456789:AABBcc...`）
+3. 给 Bot 发任意消息，然后访问：
+   ```
+   https://api.telegram.org/bot<TOKEN>/getUpdates
+   ```
+   在返回 JSON 里找 `"chat":{"id":...}`，即为你的 **Chat ID**（私聊为正数，群聊为负数）
+
+### 第二步：创建数据库
+
+推荐 [TiDB Cloud Serverless](https://tidbcloud.com)（有免费额度）。
+
+1. 注册并创建 Serverless Cluster，记录连接信息（host / port / user / password）
+2. 在 SQL Editor 执行下方三张表的建表语句（见"数据库"章节）
+
+也可使用任意 MySQL 5.7+ 实例，端口默认 `3306`（TiDB Cloud 默认 `4000`）。
+
+### 第三步：准备 LLM API Key
+
+系统使用 `gpt-4o-mini` 对截图做视觉分析，需要支持 vision 的 OpenAI 兼容 API。
+
+- OpenAI 官方：`https://api.openai.com/v1`，在 [platform.openai.com](https://platform.openai.com) 创建 API Key
+- 其他兼容服务（如 Azure OpenAI、第三方代理）：填对应的 `LLM_BASE_URL` 和 `LLM_API_KEY` 即可
+
+### 第四步：部署容器
+
+```bash
+# 1. 克隆仓库
+git clone https://github.com/nianyi778/flight-monitor-docker.git
+cd flight-monitor-docker
+
+# 2. 复制配置文件
+cp .env.example .env
+
+# 3. 编辑 .env，填入真实值
+#    必填：LLM_BASE_URL / LLM_API_KEY / TG_BOT_TOKEN / TG_CHAT_ID / DB_HOST / DB_USER / DB_PASSWORD
+vim .env
+
+# 4. 启动
+docker compose up -d
+
+# 5. 查看日志（确认正常启动）
+docker compose logs -f
+```
+
+正常启动日志示例：
+```
+🔌 MCP Server started on port 8081
+✈️  Flight Monitor 启动 (#1)
+📋 监控行程: 0 个
+```
+
+### 第五步：建表
+
+在数据库执行下方 SQL（第一次部署时执行一次即可）。
+
+### 第六步：添加监控行程
+
+容器启动后，在 Telegram 与 Bot 对话：
+
+```
+# 查看帮助
+/help
+
+# 添加行程：去程日期 回程日期 预算 去程时间窗口 回程时间窗口
+/trip add 2026-09-18 2026-09-28 1500 去19-23 回0-6
+
+# 立即触发一次查价（验证配置是否正确）
+/check
+
+# 查看系统状态
+/status
+
+# 查看健康状态（LLM / DB / 代理 / TG 连通性）
+/health
+```
+
+### 第七步：验证部署
+
+```bash
+# HTTP 健康检查（返回 200 表示正常，503 表示 DB 异常）
+curl http://localhost:8081/health
+```
+
+返回示例：
+```json
+{
+  "status": "ok",
+  "database": "ok",
+  "active_trips": 1,
+  "check_count": 3,
+  "server_time_jst": "2026-03-19 10:00:00"
+}
+```
+
+### 可选：住宅代理
+
+携程和 Google Flights 有反爬检测，长期使用建议配置住宅代理：
+
+```env
+PROXY_URL=http://user:pass@host:port
+# 或 socks5://user:pass@host:port
+```
+
+代理 IP 验证：TG 发送 `/health`，返回结果中 `proxy.exit_ip` 应为代理出口 IP。
+
+### 可选：MCP Server 接入
+
+将 AI Agent（如 Claude、OpenClaw）指向 SSE 地址即可：
+
+```
+http://<your-host>:8081/sse
+```
+
+Agent 可调用的能力：查行程、加行程、改行程、删行程、查价格历史、健康检查等。
+
+---
 
 ### 环境变量
 
@@ -95,7 +209,7 @@ SSE 连接地址：`http://<host>:8081/sse`
 |------|------|--------|------|
 | `LLM_BASE_URL` | ✅ | — | LLM API 地址（OpenAI 兼容） |
 | `LLM_API_KEY` | ✅ | — | LLM API Key |
-| `LLM_MODEL` | | `gpt-4o` | 仅供 health check 连通性测试；实际截图分析固定使用 `gpt-4o-mini` |
+| `LLM_MODEL` | | `gpt-4o-mini` | 仅供 health check 连通性测试；实际截图分析固定使用 `gpt-4o-mini` |
 | `TG_BOT_TOKEN` | ✅ | — | Telegram Bot Token |
 | `TG_CHAT_ID` | ✅ | — | Telegram 私聊 Chat ID |
 | `TG_GROUP_IDS` | | — | 群聊 Chat ID（逗号分隔，如 `-100123,-100456`） |
@@ -156,9 +270,9 @@ volumes:
   flight-data:
 ```
 
-### 数据库
+### 数据库建表 SQL
 
-需要三张表：`flight_prices`（航班明细）、`check_summary`（巡查汇总）、`trips`（行程配置）。
+三张表：`trips`（行程配置）、`flight_prices`（航班明细）、`check_summary`（巡查汇总）。
 
 ```sql
 CREATE TABLE trips (
