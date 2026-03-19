@@ -29,7 +29,7 @@ _AIRPORT_NAMES = {
 USD_TO_CNY = 7.2
 
 
-def fetch_spring_prices(origin, destination, year_month):
+def fetch_spring_prices(origin, destination, year_month, session=None):
     """
     从春秋官网API获取某月每日最低价
 
@@ -37,6 +37,7 @@ def fetch_spring_prices(origin, destination, year_month):
         origin: 出发机场代码 (NRT/HND)
         destination: 到达机场代码 (PVG/SHA)
         year_month: 年月字符串 "2026-9" 或 "2026-09"
+        session: 可选 requests.Session，用于共享 WAF cookie
 
     Returns:
         {
@@ -65,8 +66,9 @@ def fetch_spring_prices(origin, destination, year_month):
         "IsShowTaxprice": "false",
     }
 
+    requester = session or requests
     try:
-        resp = requests.post(_API_URL, headers=_HEADERS, data=data, timeout=15)
+        resp = requester.post(_API_URL, headers=_HEADERS, data=data, timeout=15)
         resp.raise_for_status()
         result = resp.json()
 
@@ -128,8 +130,15 @@ def get_spring_price_for_trip(trip):
     all_ob = {}  # {(date, origin, dest): price_cny}
     all_rt = {}
 
+    # 用共享 Session，先访问主页拿到阿里云 WAF 的 acw_tc cookie，避免后续 POST 被 405
+    session = requests.Session()
+    try:
+        session.get("https://en.ch.com/", headers=_HEADERS, timeout=10)
+    except Exception:
+        pass  # warm-up 失败不影响主流程
+
     for origin, dest in ob_routes:
-        prices = fetch_spring_prices(origin, dest, ob_month)
+        prices = fetch_spring_prices(origin, dest, ob_month, session)
         # 目标日期
         if ob_date in prices:
             key = (ob_date, origin, dest)
@@ -147,7 +156,7 @@ def get_spring_price_for_trip(trip):
                 }
 
     for origin, dest in rt_routes:
-        prices = fetch_spring_prices(origin, dest, rt_month)
+        prices = fetch_spring_prices(origin, dest, rt_month, session)
         if rt_date in prices:
             key = (rt_date, origin, dest)
             all_rt[key] = prices[rt_date]["price_cny"]
@@ -161,6 +170,8 @@ def get_spring_price_for_trip(trip):
                 result["return_flex"][f"{flex_date}_{origin}_{dest}"] = {
                     "route": f"{origin}→{dest}", **prices[flex_date]
                 }
+
+    session.close()
 
     # 找全局最优组合
     if all_ob and all_rt:

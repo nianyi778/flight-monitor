@@ -219,6 +219,7 @@ ORDER BY min_price;
 
 | 版本 | 主要更新 |
 |------|---------|
+| v3.15 | 修复春秋API 405：阿里云WAF需要 acw_tc cookie，改用 Session+warm-up GET 共享 cookie |
 | v3.14 | 修复截图文件名冲突：多行程同数据源同direction导致后者覆盖前者价格数据，文件名加入 flight_date |
 | v3.13 | 抓取提速：砍SHA路线/携程+Google并行双context/等待价格元素替代固定sleep/截图预校验/弹性日期按倒计时收缩 |
 | v3.12 | 修复 TG 推送 400：Markdown 失败自动降级纯文本，去掉提醒消息多余 Markdown |
