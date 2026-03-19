@@ -1,16 +1,12 @@
 services:
   flight-monitor:
-    image: ghcr.io/nianyi778/flight-monitor:v4.4
+    image: ghcr.io/nianyi778/flight-monitor:v4.5
     # 本地构建时改用: build: .
     container_name: flight-monitor
     restart: unless-stopped
     ports:
       - "127.0.0.1:8081:8081"
     environment:
-      # LLM API（可选，仅截图兜底需要）
-      - LLM_BASE_URL=${LLM_BASE_URL:-}
-      - LLM_API_KEY=${LLM_API_KEY:-}
-      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
       # Telegram
       - TG_BOT_TOKEN=${TG_BOT_TOKEN}
       - TG_CHAT_ID=${TG_CHAT_ID}
@@ -26,8 +22,6 @@ services:
       - PUSH_INTERVAL=${PUSH_INTERVAL:-3600}
       # 代理（可选）
       - PROXY_URL=${PROXY_URL:-}
-      # 纯 API 模式（true = 完全禁用截图兜底，即使 LLM_API_KEY 有值）
-      - API_ONLY_MODE=${API_ONLY_MODE:-false}
       # MCP Server
       - MCP_ENABLED=${MCP_ENABLED:-true}
       - MCP_PORT=${MCP_PORT:-8081}
