@@ -13,7 +13,6 @@ from starlette.responses import JSONResponse
 from app.config import now_jst, log, load_state
 from app.db import get_db, get_active_trips
 from app.source_runtime import (
-    browser_skip_active,
     ensure_runtime_state,
     get_runtime_metrics,
     get_source_status_snapshot,
@@ -24,9 +23,8 @@ mcp = FastMCP(
     "Flight Monitor",
     instructions=(
         "东京⇄上海机票价格自动监控系统。"
-        "监控多个行程的机票价格，自动抓取携程和Google Flights数据，"
-        "通过GPT-4o视觉分析提取价格，发现低价自动通知。"
-        "支持多行程管理、弹性日期搜索、住宅代理防检测。"
+        "数据源：携程（browser DOM抓取）、Google Flights（fast-flights protobuf）、春秋航空官网（直连API）。"
+        "发现低价自动推送 Telegram 通知。支持多行程管理、弹性日期搜索、住宅代理。"
     ),
 )
 
@@ -450,21 +448,11 @@ def get_cheapest_flights(trip_id: int = None, direction: str = "outbound", limit
 
 @mcp.tool()
 def health_check() -> dict:
-    """检查系统各组件健康状态：LLM连通性、数据库、代理、TG Bot。"""
-    from app.config import LLM_BASE_URL, LLM_API_KEY, LLM_MODEL, PROXY_URL, TG_BOT_TOKEN
+    """检查系统各组件健康状态：数据库、代理、TG Bot。"""
+    from app.config import PROXY_URL, TG_BOT_TOKEN
     import requests
 
     checks = {}
-
-    # LLM
-    try:
-        r = requests.post(f"{LLM_BASE_URL}/chat/completions",
-            headers={"Authorization": f"Bearer {LLM_API_KEY}"},
-            json={"model": LLM_MODEL, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 5},
-            timeout=10)
-        checks["llm"] = {"status": "ok", "model": LLM_MODEL}
-    except Exception as e:
-        checks["llm"] = {"status": "error", "error": str(e)}
 
     # DB
     try:
@@ -501,7 +489,6 @@ def health_check() -> dict:
         "boot_count": state.get("boot_count", 0),
         "check_count": state.get("check_count", 0),
         "server_time_jst": now_jst().strftime("%Y-%m-%d %H:%M:%S"),
-        "browser_skip_active": browser_skip_active(state, now_jst()),
         "source_status": get_source_status_snapshot(state),
         "proxy_pool": proxy_pool_summary(state),
         "recent_alerts": state.get("runtime_alerts", [])[-5:],
@@ -513,7 +500,7 @@ def health_check() -> dict:
 @mcp.tool()
 def get_system_info() -> dict:
     """获取系统配置和运行信息。"""
-    from app.config import LLM_MODEL, LLM_BASE_URL, CHECK_INTERVAL, PROXY_URL
+    from app.config import CHECK_INTERVAL, PROXY_URL
 
     state = load_state()
     ensure_runtime_state(state)
@@ -523,8 +510,6 @@ def get_system_info() -> dict:
         "name": "Flight Monitor",
         "description": "东京⇄上海机票价格自动监控系统",
         "config": {
-            "llm_model": LLM_MODEL,
-            "llm_api": LLM_BASE_URL.split("//")[1] if "//" in LLM_BASE_URL else LLM_BASE_URL,
             "check_interval_seconds": CHECK_INTERVAL,
             "proxy": PROXY_URL or "not configured",
         },
@@ -533,7 +518,6 @@ def get_system_info() -> dict:
             "check_count": state.get("check_count", 0),
             "active_trips": len(trips),
             "server_time_jst": now_jst().strftime("%Y-%m-%d %H:%M:%S"),
-            "browser_skip_active": browser_skip_active(state, now_jst()),
         },
         "source_status": get_source_status_snapshot(state),
         "proxy_pool": proxy_pool_summary(state),
@@ -571,7 +555,6 @@ def get_runtime_metrics_snapshot(recent_limit: int = 10) -> dict:
         "source_stats": metrics.get("source_stats", {}),
         "source_status": get_source_status_snapshot(state),
         "proxy_pool": proxy_pool_summary(state),
-        "browser_skip_active": browser_skip_active(state, now_jst()),
         "recent_alerts": state.get("runtime_alerts", [])[-5:],
     }
 
@@ -750,13 +733,12 @@ def resource_active_trips() -> str:
 @mcp.resource("system://status")
 def resource_system_status() -> str:
     """系统运行状态摘要"""
-    from app.config import LLM_MODEL, CHECK_INTERVAL
+    from app.config import CHECK_INTERVAL
 
     state = load_state()
     trips = get_active_trips()
     return (
         f"机票监控系统运行中\n"
-        f"模型: {LLM_MODEL}\n"
         f"已巡查: {state.get('check_count', 0)}次\n"
         f"监控行程: {len(trips)}个\n"
         f"检查间隔: ~{CHECK_INTERVAL // 60}分钟\n"
@@ -783,7 +765,7 @@ async def http_health(request: Request) -> JSONResponse:
       "server_time_jst": "2026-03-18 15:30:00"
     }
     """
-    from app.config import LLM_MODEL, CHECK_INTERVAL
+    from app.config import CHECK_INTERVAL
 
     result: dict = {}
 
@@ -805,9 +787,7 @@ async def http_health(request: Request) -> JSONResponse:
     result["check_count"] = state.get("check_count", 0)
     result["boot_count"] = state.get("boot_count", 0)
     result["server_time_jst"] = now_jst().strftime("%Y-%m-%d %H:%M:%S")
-    result["llm_model"] = LLM_MODEL
     result["check_interval_s"] = CHECK_INTERVAL
-    result["browser_skip_active"] = browser_skip_active(state, now_jst())
     result["source_status"] = get_source_status_snapshot(state)
     result["proxy_pool"] = proxy_pool_summary(state)
     result["recent_alerts"] = state.get("runtime_alerts", [])[-5:]
