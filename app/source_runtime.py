@@ -23,6 +23,23 @@ def ensure_runtime_state(state: dict) -> dict:
     state.setdefault("proxy_pool_status", {})
     state.setdefault("profile_assignments", {})
     state.setdefault("last_block_events", [])
+    state.setdefault("runtime_alerts", [])
+    state.setdefault("metrics", {
+        "totals": {
+            "checks": 0,
+            "searches": 0,
+            "real_requests": 0,
+            "cache_hits": 0,
+            "browser_fallbacks": 0,
+            "blocked_results": 0,
+            "cooldown_events": 0,
+            "valid_results": 0,
+            "alerts": 0,
+        },
+        "source_stats": {},
+        "last_check": None,
+        "recent_checks": [],
+    })
     for source in _SOURCE_NAMES:
         state["source_health"].setdefault(source, {
             "status": "healthy",
@@ -31,6 +48,14 @@ def ensure_runtime_state(state: dict) -> dict:
             "consecutive_failures": 0,
             "cooldown_until": None,
             "last_block_reason": None,
+        })
+        state["metrics"]["source_stats"].setdefault(source, {
+            "real_requests": 0,
+            "cache_hits": 0,
+            "blocked_results": 0,
+            "valid_results": 0,
+            "cooldown_events": 0,
+            "last_status": "unknown",
         })
     return state
 
@@ -107,6 +132,9 @@ def force_source_cooldown(state: dict, source: str, reason: str | None, now_dt: 
         "forced": True,
     })
     state["last_block_events"] = state["last_block_events"][-20:]
+    state["metrics"]["totals"]["cooldown_events"] += 1
+    state["metrics"]["source_stats"].setdefault(source, {}).setdefault("cooldown_events", 0)
+    state["metrics"]["source_stats"][source]["cooldown_events"] += 1
     return health
 
 
@@ -279,3 +307,90 @@ def browser_skip_active(state: dict, now_dt: datetime) -> bool:
     ensure_runtime_state(state)
     skip_until = _parse_dt(state.get("browser_skip_until"))
     return bool(skip_until and skip_until > now_dt)
+
+
+def init_check_metrics(check_id: int, due_trips: int, total_searches: int, started_at: datetime) -> dict:
+    return {
+        "check_id": check_id,
+        "started_at": started_at.isoformat(),
+        "duration_ms": None,
+        "due_trips": due_trips,
+        "searches": total_searches,
+        "real_requests": 0,
+        "cache_hits": 0,
+        "browser_fallbacks": 0,
+        "blocked_results": 0,
+        "valid_results": 0,
+        "alerts": 0,
+        "cooldown_active_sources": 0,
+        "source_breakdown": {},
+    }
+
+
+def record_check_metric_event(metrics: dict, source: str, *, from_cache: bool, status: str, has_flights: bool, request_mode: str) -> None:
+    metrics["source_breakdown"].setdefault(source, {
+        "real_requests": 0,
+        "cache_hits": 0,
+        "blocked_results": 0,
+        "valid_results": 0,
+        "browser_fallbacks": 0,
+    })
+    source_metrics = metrics["source_breakdown"][source]
+    if from_cache:
+        metrics["cache_hits"] += 1
+        source_metrics["cache_hits"] += 1
+    else:
+        metrics["real_requests"] += 1
+        source_metrics["real_requests"] += 1
+    if request_mode == "browser":
+        metrics["browser_fallbacks"] += 1
+        source_metrics["browser_fallbacks"] += 1
+    if status == "blocked":
+        metrics["blocked_results"] += 1
+        source_metrics["blocked_results"] += 1
+    if has_flights:
+        metrics["valid_results"] += 1
+        source_metrics["valid_results"] += 1
+
+
+def finalize_check_metrics(state: dict, metrics: dict, ended_at: datetime) -> dict:
+    ensure_runtime_state(state)
+    metrics["duration_ms"] = max(int((ended_at - _parse_dt(metrics["started_at"])).total_seconds() * 1000), 0)
+    metrics["cooldown_active_sources"] = sum(
+        1 for item in state["source_health"].values() if item.get("status") == "cooldown"
+    )
+    totals = state["metrics"]["totals"]
+    totals["checks"] += 1
+    totals["searches"] += metrics["searches"]
+    totals["real_requests"] += metrics["real_requests"]
+    totals["cache_hits"] += metrics["cache_hits"]
+    totals["browser_fallbacks"] += metrics["browser_fallbacks"]
+    totals["blocked_results"] += metrics["blocked_results"]
+    totals["valid_results"] += metrics["valid_results"]
+    totals["alerts"] += metrics["alerts"]
+    for source, source_metrics in metrics["source_breakdown"].items():
+        target = state["metrics"]["source_stats"].setdefault(source, {
+            "real_requests": 0,
+            "cache_hits": 0,
+            "blocked_results": 0,
+            "valid_results": 0,
+            "cooldown_events": 0,
+            "last_status": "unknown",
+        })
+        for field in ("real_requests", "cache_hits", "blocked_results", "valid_results"):
+            target[field] += source_metrics.get(field, 0)
+        if source_metrics.get("blocked_results"):
+            target["last_status"] = "blocked"
+        elif source_metrics.get("valid_results"):
+            target["last_status"] = "ok"
+        elif source_metrics.get("real_requests"):
+            target["last_status"] = "no_data"
+    state["metrics"]["last_check"] = metrics
+    state["metrics"]["recent_checks"].append(metrics)
+    state["metrics"]["recent_checks"] = state["metrics"]["recent_checks"][-20:]
+    return metrics
+
+
+def get_runtime_metrics(state: dict) -> dict:
+    ensure_runtime_state(state)
+    return state["metrics"]

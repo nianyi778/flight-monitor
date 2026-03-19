@@ -5,14 +5,20 @@ MCP Server - 让其他 AI Agent 发现和操作机票监控系统
 暴露资源（Resources）：行程列表、价格数据、系统状态
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from app.config import now_jst, log, load_state
 from app.db import get_db, get_active_trips
-from app.source_runtime import browser_skip_active, ensure_runtime_state, get_source_status_snapshot, proxy_pool_summary
+from app.source_runtime import (
+    browser_skip_active,
+    ensure_runtime_state,
+    get_runtime_metrics,
+    get_source_status_snapshot,
+    proxy_pool_summary,
+)
 
 mcp = FastMCP(
     "Flight Monitor",
@@ -23,6 +29,22 @@ mcp = FastMCP(
         "支持多行程管理、弹性日期搜索、住宅代理防检测。"
     ),
 )
+
+
+def _format_dt(value) -> str | None:
+    if not value:
+        return None
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    return str(value)
+
+
+def _normalize_days(days: int) -> int:
+    try:
+        days_value = int(days)
+    except Exception:
+        return 7
+    return min(max(days_value, 1), 90)
 
 
 def _validate_trip_fields(payload: dict, existing_trip: dict | None = None) -> dict | None:
@@ -525,6 +547,181 @@ def get_system_info() -> dict:
             "东航(MU)", "国航(CA)", "吉祥(HO)",
             "ANA(NH)", "JAL(JL)", "上航(FM)",
         ],
+    }
+
+
+@mcp.tool()
+def get_runtime_metrics_snapshot(recent_limit: int = 10) -> dict:
+    """
+    查询运行时 metrics 快照。
+
+    Args:
+        recent_limit: 返回最近多少轮巡查指标，默认10，最大20
+    """
+    state = load_state()
+    ensure_runtime_state(state)
+    metrics = get_runtime_metrics(state)
+    limit = min(max(int(recent_limit or 10), 1), 20)
+
+    return {
+        "generated_at": now_jst().strftime("%Y-%m-%d %H:%M:%S"),
+        "totals": metrics.get("totals", {}),
+        "last_check": metrics.get("last_check"),
+        "recent_checks": metrics.get("recent_checks", [])[-limit:],
+        "source_stats": metrics.get("source_stats", {}),
+        "source_status": get_source_status_snapshot(state),
+        "proxy_pool": proxy_pool_summary(state),
+        "browser_skip_active": browser_skip_active(state, now_jst()),
+        "recent_alerts": state.get("runtime_alerts", [])[-5:],
+    }
+
+
+@mcp.tool()
+def get_metrics_history(days: int = 7, trip_id: int = None) -> dict:
+    """
+    查询历史指标聚合，直接基于 TiDB 的 check_summary / flight_prices。
+
+    Args:
+        days: 查询最近 N 天，默认 7，范围 1-90
+        trip_id: 可选，指定单个行程编号
+    """
+    days_value = _normalize_days(days)
+    end_dt = now_jst()
+    start_dt = end_dt - timedelta(days=days_value)
+
+    trip_filter_summary = ""
+    trip_filter_prices = ""
+    summary_params = [start_dt]
+    price_params = [start_dt]
+
+    if trip_id is not None:
+        trip_filter_summary = " AND trip_id=%s"
+        trip_filter_prices = " AND trip_id=%s"
+        summary_params.append(trip_id)
+        price_params.append(trip_id)
+
+    with get_db() as db:
+        c = db.cursor()
+
+        c.execute(
+            "SELECT DATE(check_time) AS day, "
+            "COUNT(*) AS checks, "
+            "SUM(CASE WHEN best_total IS NOT NULL THEN 1 ELSE 0 END) AS checks_with_result, "
+            "AVG(flights_found) AS avg_flights_found, "
+            "MIN(best_total) AS min_best_total, "
+            "AVG(best_total) AS avg_best_total "
+            "FROM check_summary "
+            "WHERE check_time >= %s"
+            f"{trip_filter_summary} "
+            "GROUP BY DATE(check_time) "
+            "ORDER BY day DESC",
+            tuple(summary_params),
+        )
+        daily_checks_rows = c.fetchall()
+
+        c.execute(
+            "SELECT DATE(check_time) AS day, source, "
+            "COUNT(*) AS flight_rows, "
+            "COUNT(DISTINCT trip_id) AS trips, "
+            "MIN(price_cny) AS min_price, "
+            "AVG(price_cny) AS avg_price "
+            "FROM flight_prices "
+            "WHERE check_time >= %s"
+            f"{trip_filter_prices} "
+            "GROUP BY DATE(check_time), source "
+            "ORDER BY day DESC, source ASC",
+            tuple(price_params),
+        )
+        source_rows = c.fetchall()
+
+        c.execute(
+            "SELECT DATE(check_time) AS day, direction, "
+            "COUNT(*) AS flight_rows, "
+            "COUNT(DISTINCT source) AS source_count, "
+            "MIN(price_cny) AS min_price, "
+            "AVG(price_cny) AS avg_price "
+            "FROM flight_prices "
+            "WHERE check_time >= %s"
+            f"{trip_filter_prices} "
+            "GROUP BY DATE(check_time), direction "
+            "ORDER BY day DESC, direction ASC",
+            tuple(price_params),
+        )
+        direction_rows = c.fetchall()
+
+        c.execute(
+            "SELECT COUNT(*) AS checks, "
+            "SUM(CASE WHEN best_total IS NOT NULL THEN 1 ELSE 0 END) AS checks_with_result, "
+            "AVG(flights_found) AS avg_flights_found, "
+            "MIN(best_total) AS min_best_total, "
+            "AVG(best_total) AS avg_best_total "
+            "FROM check_summary "
+            "WHERE check_time >= %s"
+            f"{trip_filter_summary}",
+            tuple(summary_params),
+        )
+        summary_totals = c.fetchone()
+
+    daily_checks = []
+    for row in daily_checks_rows:
+        checks = int(row[1] or 0)
+        checks_with_result = int(row[2] or 0)
+        daily_checks.append({
+            "day": str(row[0]),
+            "checks": checks,
+            "checks_with_result": checks_with_result,
+            "result_rate": round(checks_with_result / checks, 4) if checks else 0,
+            "avg_flights_found": float(row[3]) if row[3] is not None else None,
+            "min_best_total": row[4],
+            "avg_best_total": float(row[5]) if row[5] is not None else None,
+        })
+
+    source_coverage = [
+        {
+            "day": str(row[0]),
+            "source": row[1],
+            "flight_rows": int(row[2] or 0),
+            "trip_count": int(row[3] or 0),
+            "min_price": row[4],
+            "avg_price": float(row[5]) if row[5] is not None else None,
+        }
+        for row in source_rows
+    ]
+
+    direction_coverage = [
+        {
+            "day": str(row[0]),
+            "direction": row[1],
+            "flight_rows": int(row[2] or 0),
+            "source_count": int(row[3] or 0),
+            "min_price": row[4],
+            "avg_price": float(row[5]) if row[5] is not None else None,
+        }
+        for row in direction_rows
+    ]
+
+    total_checks = int((summary_totals[0] if summary_totals else 0) or 0)
+    total_checks_with_result = int((summary_totals[1] if summary_totals else 0) or 0)
+
+    return {
+        "generated_at": end_dt.strftime("%Y-%m-%d %H:%M:%S"),
+        "range": {
+            "days": days_value,
+            "trip_id": trip_id,
+            "start": _format_dt(start_dt),
+            "end": _format_dt(end_dt),
+        },
+        "summary": {
+            "checks": total_checks,
+            "checks_with_result": total_checks_with_result,
+            "result_rate": round(total_checks_with_result / total_checks, 4) if total_checks else 0,
+            "avg_flights_found": float(summary_totals[2]) if summary_totals and summary_totals[2] is not None else None,
+            "min_best_total": summary_totals[3] if summary_totals else None,
+            "avg_best_total": float(summary_totals[4]) if summary_totals and summary_totals[4] is not None else None,
+        },
+        "daily_checks": daily_checks,
+        "source_coverage": source_coverage,
+        "direction_coverage": direction_coverage,
     }
 
 

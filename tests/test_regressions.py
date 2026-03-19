@@ -2,8 +2,34 @@ import unittest
 import types
 import sys
 from datetime import timedelta
+from unittest.mock import patch
 
 sys.modules.setdefault("requests", types.SimpleNamespace())
+
+
+class _FakeFastMCP:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def tool(self, *args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
+    def resource(self, *args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
+    def custom_route(self, *args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
+
+sys.modules.setdefault("fastmcp", types.SimpleNamespace(FastMCP=_FakeFastMCP))
+sys.modules.setdefault("starlette.requests", types.SimpleNamespace(Request=object))
+sys.modules.setdefault("starlette.responses", types.SimpleNamespace(JSONResponse=object))
 
 from app.bot import (
     _parse_flex_arg,
@@ -13,7 +39,18 @@ from app.bot import (
 )
 from app.analyzer import classify_screenshot_page, diagnose_failure_context
 from app.matcher import find_best_combinations
-from app.source_runtime import browser_skip_active, ensure_runtime_state, force_source_cooldown, mark_skip_browser_until, source_in_cooldown
+from app.mcp_server import get_metrics_history
+from app.source_runtime import (
+    browser_skip_active,
+    ensure_runtime_state,
+    finalize_check_metrics,
+    force_source_cooldown,
+    get_runtime_metrics,
+    init_check_metrics,
+    mark_skip_browser_until,
+    record_check_metric_event,
+    source_in_cooldown,
+)
 from app.config import now_jst
 
 
@@ -113,6 +150,96 @@ class RuntimeControlTests(unittest.TestCase):
         now_dt = now_jst()
         mark_skip_browser_until(state, now_dt, 300)
         self.assertTrue(browser_skip_active(state, now_dt))
+
+    def test_runtime_metrics_accumulate_check_events(self):
+        state = {}
+        ensure_runtime_state(state)
+        now_dt = now_jst()
+        metrics = init_check_metrics(check_id=3, due_trips=2, total_searches=5, started_at=now_dt)
+
+        record_check_metric_event(
+            metrics,
+            "ctrip_api",
+            from_cache=False,
+            status="ok",
+            has_flights=True,
+            request_mode="api",
+        )
+        record_check_metric_event(
+            metrics,
+            "google_api",
+            from_cache=True,
+            status="blocked",
+            has_flights=False,
+            request_mode="api",
+        )
+
+        finalize_check_metrics(state, metrics, now_dt + timedelta(seconds=2))
+        runtime_metrics = get_runtime_metrics(state)
+
+        self.assertEqual(runtime_metrics["totals"]["checks"], 1)
+        self.assertEqual(runtime_metrics["totals"]["real_requests"], 1)
+        self.assertEqual(runtime_metrics["totals"]["cache_hits"], 1)
+        self.assertEqual(runtime_metrics["totals"]["blocked_results"], 1)
+        self.assertEqual(runtime_metrics["totals"]["valid_results"], 1)
+        self.assertEqual(runtime_metrics["recent_checks"][-1]["duration_ms"], 2000)
+
+
+class FakeCursor:
+    def __init__(self):
+        self._result = []
+
+    def execute(self, query, params=None):
+        normalized = " ".join(query.split())
+        if "GROUP BY DATE(check_time) ORDER BY day DESC" in normalized:
+            self._result = [
+                ("2026-03-20", 4, 3, 12.5, 980, 1120.0),
+                ("2026-03-19", 2, 1, 6.0, 1200, 1250.0),
+            ]
+        elif "GROUP BY DATE(check_time), source" in normalized:
+            self._result = [
+                ("2026-03-20", "ctrip_api", 14, 3, 980, 1088.0),
+                ("2026-03-20", "google_api", 9, 2, 1010, 1115.5),
+            ]
+        elif "GROUP BY DATE(check_time), direction" in normalized:
+            self._result = [
+                ("2026-03-20", "outbound", 12, 2, 980, 1090.0),
+                ("2026-03-20", "return", 11, 2, 999, 1108.0),
+            ]
+        else:
+            self._result = [(6, 4, 10.3333, 980, 1163.3)]
+
+    def fetchall(self):
+        return self._result
+
+    def fetchone(self):
+        return self._result[0]
+
+
+class FakeDB:
+    def cursor(self):
+        return FakeCursor()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class MCPMetricsHistoryTests(unittest.TestCase):
+    @patch("app.mcp_server.get_db", return_value=FakeDB())
+    def test_get_metrics_history_returns_tidb_aggregates(self, _mock_get_db):
+        result = get_metrics_history(days=7, trip_id=12)
+
+        self.assertEqual(result["range"]["days"], 7)
+        self.assertEqual(result["range"]["trip_id"], 12)
+        self.assertEqual(result["summary"]["checks"], 6)
+        self.assertEqual(result["summary"]["checks_with_result"], 4)
+        self.assertAlmostEqual(result["summary"]["result_rate"], 0.6667, places=4)
+        self.assertEqual(result["daily_checks"][0]["day"], "2026-03-20")
+        self.assertEqual(result["source_coverage"][0]["source"], "ctrip_api")
+        self.assertEqual(result["direction_coverage"][0]["direction"], "outbound")
 
 
 if __name__ == "__main__":
