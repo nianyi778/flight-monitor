@@ -7,6 +7,7 @@ Google Flights API 客户端
 
 import re
 
+from app.anti_bot import classify_exception, finalize_result_status, make_result
 from app.config import log
 
 
@@ -72,14 +73,14 @@ def _query_fast_flights(origin, destination, date_str):
     返回 fast-flights Result 对象，失败返回 None
     """
     try:
-        return _get_flights_v1(origin, destination, date_str)
+        return _get_flights_v1(origin, destination, date_str), None
     except (ImportError, TypeError, AttributeError):
         pass
     try:
-        return _get_flights_v2(origin, destination, date_str)
+        return _get_flights_v2(origin, destination, date_str), None
     except Exception as e:
         log.debug(f"  Google fast-flights 失败 {origin}→{destination}: {e}")
-        return None
+        return None, e
 
 
 def _parse_result(result, origin, destination):
@@ -135,7 +136,7 @@ def _parse_result(result, origin, destination):
     return sorted(flights, key=lambda x: x.get("price_cny", 99999))
 
 
-def get_google_flights_for_searches(searches):
+def get_google_flights_for_searches(searches, proxy_url=None, proxy_id=None):
     """
     批量查询 Google Flights 航班价格
 
@@ -158,6 +159,11 @@ def get_google_flights_for_searches(searches):
             "error": "fast-flights 未安装",
             "source": "GoogleAPI", "url": s["url"],
             "flight_date": s.get("flight_date", ""),
+            "status": "degraded",
+            "block_reason": None,
+            "retryable": True,
+            "request_mode": "api",
+            "proxy_id": proxy_id,
         } for s in searches}
 
     results = {}
@@ -168,23 +174,23 @@ def get_google_flights_for_searches(searches):
         destination = s.get("destination", "")
         date_str = s.get("flight_date", "")
 
-        result = {
-            "flights": [],
-            "lowest_price": None,
-            "error": None,
-            "source": f"GoogleAPI_{origin}_{destination}",
-            "url": url,
-            "flight_date": date_str,
-        }
+        result = make_result(
+            source=f"GoogleAPI_{origin}_{destination}",
+            url=url,
+            flight_date=date_str,
+            proxy_id=proxy_id,
+            request_mode="api",
+        )
 
         if not (origin and destination and date_str):
             result["error"] = "缺少 origin/destination/date"
+            result["status"] = "degraded"
             results[url] = result
             continue
 
         log.info(f"  🔍 Google Flights API: {origin}→{destination} {date_str}")
 
-        raw = _query_fast_flights(origin, destination, date_str)
+        raw, query_error = _query_fast_flights(origin, destination, date_str)
         flights = _parse_result(raw, origin, destination)
 
         if flights:
@@ -192,9 +198,16 @@ def get_google_flights_for_searches(searches):
             result["lowest_price"] = flights[0]["price_cny"]
             log.info(f"  ✓ Google API: {len(flights)} 个直飞, 最低 ¥{result['lowest_price']}")
         else:
-            result["error"] = "Google Flights API: 无直飞数据（或被限流）"
+            if query_error:
+                status, reason, retryable = classify_exception(query_error)
+                result["status"] = status
+                result["block_reason"] = reason
+                result["retryable"] = retryable
+                result["error"] = f"Google Flights API: {query_error}"
+            else:
+                result["error"] = "Google Flights API: 无直飞数据（或被限流）"
             log.warning(f"  ⚠️ Google Flights API: 无数据 {origin}→{destination} {date_str}")
 
-        results[url] = result
+        results[url] = finalize_result_status(result)
 
     return results

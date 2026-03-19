@@ -10,6 +10,7 @@ import json
 import random
 import time
 
+from app.anti_bot import classify_exception, finalize_result_status, make_result
 from app.config import PROXY_URL, now_jst, log
 
 _BASE_URL = "https://flights.ctrip.com"
@@ -29,9 +30,10 @@ _CITY_NAMES = {
 }
 
 
-def _make_session():
+def _make_session(proxy_url=None):
     """创建 Session，优先用 curl_cffi 模拟 Chrome 131 TLS 指纹"""
-    proxies = {"https": PROXY_URL, "http": PROXY_URL} if PROXY_URL else None
+    proxy_server = proxy_url if proxy_url is not None else PROXY_URL
+    proxies = {"https": proxy_server, "http": proxy_server} if proxy_server else None
     ua = random.choice(_UA_POOL)
     headers = {
         "User-Agent": ua,
@@ -208,7 +210,7 @@ def _parse_flights(data, origin, destination):
     return sorted(flights, key=lambda x: x.get("price_cny", 99999))
 
 
-def get_ctrip_flights_for_searches(searches):
+def get_ctrip_flights_for_searches(searches, proxy_url=None, proxy_id=None):
     """
     批量查询携程航班价格
 
@@ -222,7 +224,7 @@ def get_ctrip_flights_for_searches(searches):
         return {}
 
     results = {}
-    session = _make_session()
+    session = _make_session(proxy_url=proxy_url)
     _warmup_session(session)
 
     for s in searches:
@@ -232,23 +234,25 @@ def get_ctrip_flights_for_searches(searches):
         date_str = s.get("flight_date", "")
         name = s.get("name", f"{origin}_{destination}")
 
-        result = {
-            "flights": [],
-            "lowest_price": None,
-            "error": None,
-            "source": f"携程API_{origin}_{destination}",
-            "url": url,
-            "flight_date": date_str,
-        }
+        result = make_result(
+            source=f"携程API_{origin}_{destination}",
+            url=url,
+            flight_date=date_str,
+            proxy_id=proxy_id,
+            request_mode="api",
+        )
 
         if not (origin and destination and date_str):
             result["error"] = "缺少 origin/destination/date"
+            result["status"] = "degraded"
             results[url] = result
             continue
 
         log.info(f"  🏷️ 携程API: {origin}→{destination} {date_str}")
 
         # 1. 先调 products（完整列表）
+        prod_error = None
+        low_error = None
         prod_data = _fetch_products(session, origin, destination, date_str)
         flights = _parse_flights(prod_data, origin, destination)
 
@@ -288,11 +292,18 @@ def get_ctrip_flights_for_searches(searches):
                 log.info(f"  ✓ 携程API lowestPrice: ¥{price}")
             else:
                 result["error"] = "携程API: 无有效数据（WAF拦截或接口变更）"
+                result["status"] = "blocked"
+                result["block_reason"] = "waf"
+                result["retryable"] = False
                 log.warning(f"  ⚠️ 携程API: 无有效数据 {origin}→{destination} {date_str}")
 
-        results[url] = result
+        results[url] = finalize_result_status(result)
 
         # 轻微延迟防止速率限制
         time.sleep(random.uniform(0.3, 0.8))
 
+    try:
+        session.close()
+    except Exception:
+        pass
     return results

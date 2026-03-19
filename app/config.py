@@ -37,6 +37,9 @@ ACK_KEYWORD = "确认收到"
 
 # 住宅代理（可选，格式: socks5://user:pass@host:port 或 http://host:port）
 PROXY_URL = os.getenv("PROXY_URL", "")
+PROXY_POOL = [p.strip() for p in os.getenv("PROXY_POOL", "").split(",") if p.strip()]
+PROXY_STICKY_MINUTES = int(os.getenv("PROXY_STICKY_MINUTES") or "30")
+PROXY_FAIL_DISABLE_THRESHOLD = int(os.getenv("PROXY_FAIL_DISABLE_THRESHOLD") or "5")
 
 # TiDB 数据库
 DB_HOST = os.getenv("DB_HOST", "")
@@ -53,6 +56,10 @@ STATE_FILE = DATA_DIR / "state.json"
 BROWSER_PROFILE = DATA_DIR / "browser_profile"
 
 API_ONLY_MODE = os.getenv("API_ONLY_MODE", "false").lower() == "true"
+SOURCE_COOLDOWN_SECONDS = int(os.getenv("SOURCE_COOLDOWN_SECONDS") or "1800")
+SOURCE_MAX_CONSECUTIVE_FAILURES = int(os.getenv("SOURCE_MAX_CONSECUTIVE_FAILURES") or "3")
+SCREENSHOT_FALLBACK_LIMIT = int(os.getenv("SCREENSHOT_FALLBACK_LIMIT") or "4")
+SOURCE_REQUEST_BUDGET_PER_HOUR = int(os.getenv("SOURCE_REQUEST_BUDGET_PER_HOUR") or "60")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

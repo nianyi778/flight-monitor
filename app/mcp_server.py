@@ -12,6 +12,7 @@ from starlette.responses import JSONResponse
 
 from app.config import now_jst, log, load_state
 from app.db import get_db, get_active_trips
+from app.source_runtime import browser_skip_active, ensure_runtime_state, get_source_status_snapshot, proxy_pool_summary
 
 mcp = FastMCP(
     "Flight Monitor",
@@ -473,10 +474,15 @@ def health_check() -> dict:
 
     # State
     state = load_state()
+    ensure_runtime_state(state)
     checks["monitor"] = {
         "boot_count": state.get("boot_count", 0),
         "check_count": state.get("check_count", 0),
         "server_time_jst": now_jst().strftime("%Y-%m-%d %H:%M:%S"),
+        "browser_skip_active": browser_skip_active(state, now_jst()),
+        "source_status": get_source_status_snapshot(state),
+        "proxy_pool": proxy_pool_summary(state),
+        "recent_alerts": state.get("runtime_alerts", [])[-5:],
     }
 
     return checks
@@ -488,6 +494,7 @@ def get_system_info() -> dict:
     from app.config import LLM_MODEL, LLM_BASE_URL, CHECK_INTERVAL, PROXY_URL
 
     state = load_state()
+    ensure_runtime_state(state)
     trips = get_active_trips()
 
     return {
@@ -504,7 +511,10 @@ def get_system_info() -> dict:
             "check_count": state.get("check_count", 0),
             "active_trips": len(trips),
             "server_time_jst": now_jst().strftime("%Y-%m-%d %H:%M:%S"),
+            "browser_skip_active": browser_skip_active(state, now_jst()),
         },
+        "source_status": get_source_status_snapshot(state),
+        "proxy_pool": proxy_pool_summary(state),
         "data_sources": [
             "携程 NRT⇄PVG (CNY)",
             "携程 HND⇄PVG (CNY)",
@@ -594,11 +604,16 @@ async def http_health(request: Request) -> JSONResponse:
 
     # 系统状态
     state = load_state()
+    ensure_runtime_state(state)
     result["check_count"] = state.get("check_count", 0)
     result["boot_count"] = state.get("boot_count", 0)
     result["server_time_jst"] = now_jst().strftime("%Y-%m-%d %H:%M:%S")
     result["llm_model"] = LLM_MODEL
     result["check_interval_s"] = CHECK_INTERVAL
+    result["browser_skip_active"] = browser_skip_active(state, now_jst())
+    result["source_status"] = get_source_status_snapshot(state)
+    result["proxy_pool"] = proxy_pool_summary(state)
+    result["recent_alerts"] = state.get("runtime_alerts", [])[-5:]
 
     # 整体状态
     result["status"] = "ok" if result["database"] == "ok" else "degraded"

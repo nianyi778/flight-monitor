@@ -1,6 +1,7 @@
 import unittest
 import types
 import sys
+from datetime import timedelta
 
 sys.modules.setdefault("requests", types.SimpleNamespace())
 
@@ -10,7 +11,10 @@ from app.bot import (
     _validate_budget_value,
     _validate_date_pair,
 )
+from app.analyzer import classify_screenshot_page, diagnose_failure_context
 from app.matcher import find_best_combinations
+from app.source_runtime import browser_skip_active, ensure_runtime_state, force_source_cooldown, mark_skip_browser_until, source_in_cooldown
+from app.config import now_jst
 
 
 class MatcherRegressionTests(unittest.TestCase):
@@ -74,6 +78,41 @@ class BotValidationTests(unittest.TestCase):
         value, error = _parse_flex_arg("回8", "回", "回程弹性")
         self.assertIsNone(value)
         self.assertIn("范围 0-7", error)
+
+
+class AnalyzerAssistTests(unittest.TestCase):
+    def test_page_classifier_uses_heuristic_for_login_wall(self):
+        result = classify_screenshot_page({
+            "name": "携程_NRT_PVG",
+            "title": "请先登录继续查看价格",
+            "body_text": "login required",
+        })
+        self.assertEqual(result["page_state"], "login_wall")
+
+    def test_failure_diagnoser_recommends_cooldown_for_waf(self):
+        diagnosis = diagnose_failure_context({
+            "status": "blocked",
+            "block_reason": "waf",
+            "error": "Access denied by WAF",
+            "request_mode": "browser",
+        })
+        self.assertEqual(diagnosis["action"], "cooldown")
+
+
+class RuntimeControlTests(unittest.TestCase):
+    def test_force_source_cooldown_marks_source_unavailable(self):
+        state = {}
+        ensure_runtime_state(state)
+        now_dt = now_jst()
+        force_source_cooldown(state, "browser_fallback", "captcha", now_dt, seconds=600)
+        self.assertTrue(source_in_cooldown(state, "browser_fallback", now_dt))
+
+    def test_mark_skip_browser_until_activates_guard(self):
+        state = {}
+        ensure_runtime_state(state)
+        now_dt = now_jst()
+        mark_skip_browser_until(state, now_dt, 300)
+        self.assertTrue(browser_skip_active(state, now_dt))
 
 
 if __name__ == "__main__":

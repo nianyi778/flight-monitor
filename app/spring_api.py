@@ -8,6 +8,7 @@
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from app.anti_bot import classify_exception
 from app.config import now_jst, log
 
 _HEADERS = {
@@ -115,14 +116,15 @@ def fetch_spring_prices(origin, destination, year_month, session=None):
                 }
 
         log.info(f"  🌸 春秋API {origin}→{destination} {year_month}: {len(prices)} 天有价格")
-        return prices
+        return prices, {"status": "ok", "block_reason": None, "retryable": True}
 
     except Exception as e:
         log.error(f"  🌸 春秋API失败 {origin}→{destination}: {e}")
-        return {}
+        status, reason, retryable = classify_exception(e)
+        return {}, {"status": status, "block_reason": reason, "retryable": retryable, "error": str(e)}
 
 
-def get_spring_price_for_trip(trip):
+def get_spring_price_for_trip(trip, proxy_url=None, proxy_id=None):
     """
     获取某行程的春秋官网直销价
 
@@ -147,6 +149,10 @@ def get_spring_price_for_trip(trip):
         "outbound": None, "return": None, "total_cny": None,
         "outbound_flex": {}, "return_flex": {},
         "source": "春秋官网",
+        "status": "no_data",
+        "block_reason": None,
+        "retryable": True,
+        "proxy_id": proxy_id,
     }
 
     from datetime import datetime, timedelta
@@ -162,6 +168,8 @@ def get_spring_price_for_trip(trip):
 
     # 用共享 Session，先访问主页拿到阿里云 WAF 的 acw_tc cookie，避免后续 POST 被 405
     session = requests.Session()
+    if proxy_url:
+        session.proxies = {"http": proxy_url, "https": proxy_url}
     try:
         session.get("https://en.ch.com/", headers=_HEADERS, timeout=10)
     except Exception:
@@ -174,18 +182,25 @@ def get_spring_price_for_trip(trip):
     )
 
     def _fetch(origin, dest, month, direction):
-        return origin, dest, month, direction, fetch_spring_prices(origin, dest, month, session)
+        prices, meta = fetch_spring_prices(origin, dest, month, session)
+        return origin, dest, month, direction, prices, meta
 
     with ThreadPoolExecutor(max_workers=8) as executor:
         futures = {executor.submit(_fetch, o, d, m, dir_): (o, d, dir_)
                    for o, d, m, dir_ in route_tasks}
         for future in as_completed(futures):
             try:
-                origin, dest, month, direction, prices = future.result()
+                origin, dest, month, direction, prices, meta = future.result()
             except Exception as e:
                 o, d, dir_ = futures[future]
                 log.error(f"  🌸 春秋并行请求失败 {o}→{d}: {e}")
                 continue
+            if meta.get("status") == "blocked":
+                result["status"] = "blocked"
+                result["block_reason"] = meta.get("block_reason")
+                result["retryable"] = meta.get("retryable", False)
+            elif meta.get("status") == "ok" and result.get("status") != "blocked":
+                result["status"] = "ok"
 
             if direction == "ob":
                 if ob_date in prices:
@@ -234,5 +249,6 @@ def get_spring_price_for_trip(trip):
 
     if result["outbound"] and result["return"]:
         result["total_cny"] = result["outbound"]["price_cny"] + result["return"]["price_cny"]
+        result["status"] = "ok"
 
     return result
