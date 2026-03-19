@@ -9,13 +9,12 @@ import signal
 from app.config import (
     LLM_API_KEY, TG_BOT_TOKEN, CHECK_INTERVAL, PUSH_INTERVAL,
     DATA_DIR, now_jst, log, load_state, save_state,
+    API_ONLY_MODE,
 )
 from app.db import (
     get_active_trips, update_trip_best_price, save_to_db,
     already_checked_this_hour,
 )
-from app.scraper import capture_screenshots, capture_screenshots_batch
-from app.analyzer import analyze_all_screenshots
 from app.matcher import find_best_combinations
 from app.notifier import tg_send, format_alert_message, _brief_price
 from app.bot import setup_tg_commands, tg_command_listener, force_check_event
@@ -174,55 +173,73 @@ async def _run_check_inner(force, all_trips, bot_module):
 
     log.info(f"🔍 搜索去重: {total_raw}个 → {total_unique}个（节省{saved}次抓取）")
 
-    # 3. 统一抓取去重后的截图
-    from app.matcher import get_search_urls
+    # 3. API 瀑布调用（携程 → Google → Amadeus → 可选截图兜底）
     unique_searches = [v["search"] for v in url_map.values()]
 
-    # 用第一个行程的 trip 对象启动浏览器（只需要 browser profile）
-    screenshots = await capture_screenshots_batch(unique_searches)
-    if not screenshots:
-        log.error("未获取到任何截图")
-        return
-
-    log.info(f"获取到 {len(screenshots)} 张截图")
-
-    # 4. 统一 LLM 分析（并行，截图预校验过滤无效截图）
-    from app.analyzer import analyze_screenshot
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    import os
-
-    _MIN_SCREENSHOT_SIZE = 30 * 1024  # 30KB 以下大概率是登录页/验证码
+    ctrip_searches = [s for s in unique_searches if s.get("source_type") == "ctrip"]
+    google_searches = [s for s in unique_searches if s.get("source_type") == "google"]
 
     all_analysis = {}  # url -> analysis_result
 
-    def _analyze(ss):
-        size = os.path.getsize(ss["path"])
-        if size < _MIN_SCREENSHOT_SIZE:
-            log.warning(f"  ⚠️ 截图过小({size//1024}KB)，跳过LLM: {ss['name']}")
-            analysis = {"flights": [], "lowest_price": None, "error": f"截图过小({size//1024}KB)，疑似登录页/验证码"}
-        else:
-            analysis = analyze_screenshot(ss)
-        analysis["source"] = ss["name"]
-        analysis["url"] = ss["url"]
-        analysis["flight_date"] = ss.get("flight_date", "")
-        return ss["url"], analysis
+    # — 携程 API —
+    if ctrip_searches:
+        from app.ctrip_api import get_ctrip_flights_for_searches
+        all_analysis.update(get_ctrip_flights_for_searches(ctrip_searches))
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        futures = {executor.submit(_analyze, ss): ss for ss in screenshots}
-        for future in as_completed(futures):
-            ss = futures[future]
-            try:
-                url, analysis = future.result()
-            except Exception as e:
-                url = ss["url"]
-                analysis = {"flights": [], "lowest_price": None, "error": str(e),
-                            "source": ss.get("name", ""), "url": url}
-                log.error(f"  ❌ LLM分析异常 {ss.get('name', '')}: {e}")
-            all_analysis[url] = analysis
-            if analysis.get("error"):
-                log.warning(f"  ⚠️ {analysis['error']}")
-            elif analysis.get("flights"):
-                log.info(f"  ✓ {len(analysis['flights'])} 个航班, 最低 ¥{analysis.get('lowest_price', '?')}")
+    # — Google Flights API —
+    if google_searches:
+        from app.google_flights_api import get_google_flights_for_searches
+        all_analysis.update(get_google_flights_for_searches(google_searches))
+
+    # — 可选截图+LLM 兜底（仅非 API_ONLY_MODE 且 LLM_API_KEY 已配置）—
+    still_missing = [s for s in unique_searches if not all_analysis.get(s["url"], {}).get("flights")]
+    if still_missing and not API_ONLY_MODE and LLM_API_KEY:
+        log.info(f"  📸 {len(still_missing)} 个搜索无API结果，降级截图+LLM")
+        try:
+            from app.scraper import capture_screenshots_batch
+            from app.analyzer import analyze_screenshot
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            import os
+
+            _MIN_SIZE = 30 * 1024
+            screenshots = await capture_screenshots_batch(still_missing)
+            if screenshots:
+                def _analyze(ss):
+                    size = os.path.getsize(ss["path"])
+                    if size < _MIN_SIZE:
+                        analysis = {"flights": [], "lowest_price": None,
+                                    "error": f"截图过小({size//1024}KB)，疑似登录页"}
+                    else:
+                        analysis = analyze_screenshot(ss)
+                    analysis["source"] = ss["name"]
+                    analysis["url"] = ss["url"]
+                    analysis["flight_date"] = ss.get("flight_date", "")
+                    return ss["url"], analysis
+
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    futures = {executor.submit(_analyze, ss): ss for ss in screenshots}
+                    for future in as_completed(futures):
+                        ss = futures[future]
+                        try:
+                            url, analysis = future.result()
+                        except Exception as e:
+                            url = ss["url"]
+                            analysis = {"flights": [], "lowest_price": None, "error": str(e),
+                                        "source": ss.get("name", ""), "url": url}
+                        # 不覆盖已有结果
+                        if url not in all_analysis or not all_analysis[url].get("flights"):
+                            all_analysis[url] = analysis
+        except ImportError:
+            log.warning("  ⚠️ Playwright 未安装，截图兜底不可用")
+
+    # 汇总日志
+    got = sum(1 for a in all_analysis.values() if a.get("flights"))
+    log.info(f"  📊 API结果: {got}/{len(unique_searches)} 个搜索有航班数据")
+    for a in all_analysis.values():
+        if a.get("error") and not a.get("flights"):
+            log.warning(f"  ⚠️ {a['error']}")
+        elif a.get("flights"):
+            log.info(f"  ✓ {a.get('source','')} {len(a['flights'])} 个航班, 最低 ¥{a.get('lowest_price', '?')}")
 
     # 5. 分发结果到各行程
     brief_lines = [f"🕐 *{now_jst().strftime('%H:%M')} 巡查报告* (第{check_count}次 | {len(due_trips)}个行程 {total_unique}次抓取)\n"]
@@ -354,11 +371,9 @@ async def main():
     log.info(f"   TG通知: {'已配置' if TG_BOT_TOKEN else '⚠️ 未配置'}")
     log.info("=" * 55)
 
-    # 检查必要配置
+    # 配置检查
     if not LLM_API_KEY:
-        log.error("❌ LLM_API_KEY 未配置，退出")
-        return
-
+        log.warning("⚠️ LLM_API_KEY 未配置，截图+LLM 兜底不可用（API 模式下无影响）")
     # 设置 TG Bot 菜单命令
     setup_tg_commands()
 

@@ -52,6 +52,8 @@ PRICE_LOG = DATA_DIR / "price_log.jsonl"
 STATE_FILE = DATA_DIR / "state.json"
 BROWSER_PROFILE = DATA_DIR / "browser_profile"
 
+API_ONLY_MODE = os.getenv("API_ONLY_MODE", "false").lower() == "true"
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 class _JSTFormatter(logging.Formatter):

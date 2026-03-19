@@ -1,5 +1,8 @@
-playwright==1.58.0
-playwright-stealth>=2.0.0
+curl_cffi>=0.7.0
+fast-flights>=2.2
 requests>=2.31.0
 pymysql>=1.1.0
 fastmcp>=2.0.0
+# 可选：保留截图兜底能力（不需要则注释掉，镜像可缩减到 ~200MB）
+# playwright==1.58.0
+# playwright-stealth>=2.0.0

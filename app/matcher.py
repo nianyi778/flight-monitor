@@ -59,6 +59,8 @@ def get_search_urls(trip):
 
     for name, direction, pair, url_tpl in templates:
         dates = ob_dates if direction == "outbound" else rt_dates
+        origin, destination = pair.split("-")
+        source_type = "ctrip" if "携程" in name else "google"
         for date in dates:
             # 弹性日期加日期后缀区分
             suffix = f"({date})" if date != (trip["outbound_date"] if direction == "outbound" else trip["return_date"]) else ""
@@ -70,6 +72,9 @@ def get_search_urls(trip):
                 "url": url_tpl.format(date=date),
                 "wait": 8 if "携程" in name else 10,
                 "flight_date": date,
+                "origin": origin,
+                "destination": destination,
+                "source_type": source_type,
             })
 
     return urls
