@@ -139,7 +139,14 @@ async def run_check(force=False):
         return
 
     bot_module.checking_in_progress = True
+    try:
+        await _run_check_inner(force, all_trips, bot_module)
+    finally:
+        bot_module.checking_in_progress = False
 
+
+async def _run_check_inner(force, all_trips, bot_module):
+    """run_check 的实际逻辑，由 run_check 负责重置 checking_in_progress 标志"""
     state = load_state()
     check_count = state.get("check_count", 0) + 1
     state["check_count"] = check_count
@@ -154,7 +161,6 @@ async def run_check(force=False):
     if not due_trips:
         log.info(f"⏭ {len(all_trips)} 个行程均未到检查时间")
         save_state(state)
-        bot_module.checking_in_progress = False
         return
 
     if skipped > 0:
@@ -176,7 +182,6 @@ async def run_check(force=False):
     screenshots = await capture_screenshots_batch(unique_searches)
     if not screenshots:
         log.error("未获取到任何截图")
-        bot_module.checking_in_progress = False
         return
 
     log.info(f"获取到 {len(screenshots)} 张截图")
@@ -205,7 +210,14 @@ async def run_check(force=False):
     with ThreadPoolExecutor(max_workers=4) as executor:
         futures = {executor.submit(_analyze, ss): ss for ss in screenshots}
         for future in as_completed(futures):
-            url, analysis = future.result()
+            ss = futures[future]
+            try:
+                url, analysis = future.result()
+            except Exception as e:
+                url = ss["url"]
+                analysis = {"flights": [], "lowest_price": None, "error": str(e),
+                            "source": ss.get("name", ""), "url": url}
+                log.error(f"  ❌ LLM分析异常 {ss.get('name', '')}: {e}")
             all_analysis[url] = analysis
             if analysis.get("error"):
                 log.warning(f"  ⚠️ {analysis['error']}")
@@ -324,8 +336,6 @@ async def run_check(force=False):
     if not s.get("pending_ack") and len(brief_lines) > 1:
         tg_send("\n\n".join(brief_lines))
 
-    bot_module.checking_in_progress = False
-
 
 async def main():
     """主循环：定时执行价格检查"""
@@ -394,12 +404,14 @@ async def main():
         wait_time = int(CHECK_INTERVAL * jitter)
         log.info(f"⏰ 下次检查: {wait_time}s 后 (随机抖动)")
         force_check_event.clear()
-        done, _ = await asyncio.wait(
+        done, pending = await asyncio.wait(
             [asyncio.create_task(shutdown_event.wait()),
              asyncio.create_task(force_check_event.wait())],
             timeout=wait_time,
             return_when=asyncio.FIRST_COMPLETED,
         )
+        for t in pending:
+            t.cancel()
         if force_check_event.is_set():
             log.info("📢 收到 /check 命令，立即执行检查")
             is_force = True

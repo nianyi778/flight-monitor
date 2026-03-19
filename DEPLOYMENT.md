@@ -95,7 +95,8 @@ CREATE TABLE flight_prices (
     flight_date DATE NOT NULL,
     INDEX idx_check_time (check_time),
     INDEX idx_trip (trip_id),
-    INDEX idx_price (price_cny)
+    INDEX idx_price (price_cny),
+    INDEX idx_trip_dir_price (trip_id, direction, price_cny)
 );
 
 CREATE TABLE check_summary (
@@ -108,7 +109,8 @@ CREATE TABLE check_summary (
     best_outbound_airline VARCHAR(50),
     best_return_airline VARCHAR(50),
     flights_found INT DEFAULT 0,
-    INDEX idx_check_time (check_time)
+    INDEX idx_check_time (check_time),
+    INDEX idx_trip_time (trip_id, check_time)
 );
 ```
 

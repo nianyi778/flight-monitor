@@ -95,20 +95,19 @@ def add_trip(
     if not (100 <= budget <= 50000):
         return {"error": "预算范围 100-50000"}
 
-    db = get_db()
-    c = db.cursor()
-    c.execute(
-        "INSERT INTO trips (outbound_date, return_date, budget, "
-        "outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end, "
-        "outbound_flex, return_flex) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-        (outbound_date, return_date, budget,
-         depart_start, depart_end, arrive_start, arrive_end,
-         outbound_flex, return_flex)
-    )
-    db.commit()
-    new_id = c.lastrowid
-    db.close()
+    with get_db() as db:
+        c = db.cursor()
+        c.execute(
+            "INSERT INTO trips (outbound_date, return_date, budget, "
+            "outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end, "
+            "outbound_flex, return_flex) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (outbound_date, return_date, budget,
+             depart_start, depart_end, arrive_start, arrive_end,
+             outbound_flex, return_flex)
+        )
+        db.commit()
+        new_id = c.lastrowid
 
     return {
         "success": True,
@@ -174,12 +173,11 @@ def edit_trip(
     set_clause = ", ".join(f"{k}=%s" for k in updates)
     values = list(updates.values()) + [trip_id]
 
-    db = get_db()
-    c = db.cursor()
-    c.execute(f"UPDATE trips SET {set_clause} WHERE id=%s AND status='active'", values)
-    affected = c.rowcount
-    db.commit()
-    db.close()
+    with get_db() as db:
+        c = db.cursor()
+        c.execute(f"UPDATE trips SET {set_clause} WHERE id=%s AND status='active'", values)
+        affected = c.rowcount
+        db.commit()
 
     if affected:
         return {"success": True, "trip_id": trip_id, "updated_fields": list(updates.keys())}
@@ -190,12 +188,11 @@ def edit_trip(
 @mcp.tool()
 def delete_trip(trip_id: int) -> dict:
     """删除（停止监控）一个行程。"""
-    db = get_db()
-    c = db.cursor()
-    c.execute("UPDATE trips SET status='deleted' WHERE id=%s", (trip_id,))
-    affected = c.rowcount
-    db.commit()
-    db.close()
+    with get_db() as db:
+        c = db.cursor()
+        c.execute("UPDATE trips SET status='deleted' WHERE id=%s", (trip_id,))
+        affected = c.rowcount
+        db.commit()
     if affected:
         return {"success": True, "message": f"行程#{trip_id}已删除"}
     return {"error": f"行程#{trip_id}不存在"}
@@ -204,12 +201,11 @@ def delete_trip(trip_id: int) -> dict:
 @mcp.tool()
 def pause_trip(trip_id: int) -> dict:
     """暂停监控一个行程。"""
-    db = get_db()
-    c = db.cursor()
-    c.execute("UPDATE trips SET status='paused' WHERE id=%s AND status='active'", (trip_id,))
-    affected = c.rowcount
-    db.commit()
-    db.close()
+    with get_db() as db:
+        c = db.cursor()
+        c.execute("UPDATE trips SET status='paused' WHERE id=%s AND status='active'", (trip_id,))
+        affected = c.rowcount
+        db.commit()
     if affected:
         return {"success": True, "message": f"行程#{trip_id}已暂停"}
     return {"error": f"行程#{trip_id}不存在或不是active状态"}
@@ -218,12 +214,11 @@ def pause_trip(trip_id: int) -> dict:
 @mcp.tool()
 def resume_trip(trip_id: int) -> dict:
     """恢复监控一个已暂停的行程。"""
-    db = get_db()
-    c = db.cursor()
-    c.execute("UPDATE trips SET status='active' WHERE id=%s AND status='paused'", (trip_id,))
-    affected = c.rowcount
-    db.commit()
-    db.close()
+    with get_db() as db:
+        c = db.cursor()
+        c.execute("UPDATE trips SET status='active' WHERE id=%s AND status='paused'", (trip_id,))
+        affected = c.rowcount
+        db.commit()
     if affected:
         return {"success": True, "message": f"行程#{trip_id}已恢复"}
     return {"error": f"行程#{trip_id}不存在或不是paused状态"}
@@ -238,24 +233,23 @@ def get_price_history(trip_id: int = None, limit: int = 20) -> dict:
         trip_id: 指定行程编号（可选，不传则查全部）
         limit: 返回最近N条记录，默认20
     """
-    db = get_db()
-    c = db.cursor()
-    if trip_id:
-        c.execute(
-            "SELECT check_time, best_total, outbound_lowest, return_lowest, "
-            "best_outbound_airline, best_return_airline "
-            "FROM check_summary WHERE trip_id=%s ORDER BY check_time DESC LIMIT %s",
-            (trip_id, limit)
-        )
-    else:
-        c.execute(
-            "SELECT check_time, best_total, outbound_lowest, return_lowest, "
-            "best_outbound_airline, best_return_airline, trip_id "
-            "FROM check_summary ORDER BY check_time DESC LIMIT %s",
-            (limit,)
-        )
-    rows = c.fetchall()
-    db.close()
+    with get_db() as db:
+        c = db.cursor()
+        if trip_id:
+            c.execute(
+                "SELECT check_time, best_total, outbound_lowest, return_lowest, "
+                "best_outbound_airline, best_return_airline "
+                "FROM check_summary WHERE trip_id=%s ORDER BY check_time DESC LIMIT %s",
+                (trip_id, limit)
+            )
+        else:
+            c.execute(
+                "SELECT check_time, best_total, outbound_lowest, return_lowest, "
+                "best_outbound_airline, best_return_airline, trip_id "
+                "FROM check_summary ORDER BY check_time DESC LIMIT %s",
+                (limit,)
+            )
+        rows = c.fetchall()
 
     records = []
     for r in reversed(rows):
@@ -284,8 +278,6 @@ def get_cheapest_flights(trip_id: int = None, direction: str = "outbound", limit
         direction: outbound（去程）或 return（回程）
         limit: 返回条数
     """
-    db = get_db()
-    c = db.cursor()
     where = "WHERE direction=%s"
     params = [direction]
     if trip_id:
@@ -293,14 +285,15 @@ def get_cheapest_flights(trip_id: int = None, direction: str = "outbound", limit
         params.append(trip_id)
     params.append(limit)
 
-    c.execute(
-        f"SELECT check_time, airline, flight_no, departure_time, arrival_time, "
-        f"price_cny, original_price, original_currency, origin, destination, flight_date "
-        f"FROM flight_prices {where} ORDER BY price_cny ASC LIMIT %s",
-        params
-    )
-    rows = c.fetchall()
-    db.close()
+    with get_db() as db:
+        c = db.cursor()
+        c.execute(
+            f"SELECT check_time, airline, flight_no, departure_time, arrival_time, "
+            f"price_cny, original_price, original_currency, origin, destination, flight_date "
+            f"FROM flight_prices {where} ORDER BY price_cny ASC LIMIT %s",
+            params
+        )
+        rows = c.fetchall()
 
     return {
         "direction": direction,
@@ -344,11 +337,10 @@ def health_check() -> dict:
 
     # DB
     try:
-        db = get_db()
-        c = db.cursor()
-        c.execute("SELECT COUNT(*) FROM trips WHERE status='active'")
-        count = c.fetchone()[0]
-        db.close()
+        with get_db() as db:
+            c = db.cursor()
+            c.execute("SELECT COUNT(*) FROM trips WHERE status='active'")
+            count = c.fetchone()[0]
         checks["database"] = {"status": "ok", "active_trips": count}
     except Exception as e:
         checks["database"] = {"status": "error", "error": str(e)}
@@ -482,11 +474,10 @@ async def http_health(request: Request) -> JSONResponse:
 
     # DB 检查
     try:
-        db = get_db()
-        c = db.cursor()
-        c.execute("SELECT COUNT(*) FROM trips WHERE status='active'")
-        active_trips = c.fetchone()[0]
-        db.close()
+        with get_db() as db:
+            c = db.cursor()
+            c.execute("SELECT COUNT(*) FROM trips WHERE status='active'")
+            active_trips = c.fetchone()[0]
         result["database"] = "ok"
         result["active_trips"] = active_trips
     except Exception as e:

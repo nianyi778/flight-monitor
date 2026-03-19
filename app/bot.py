@@ -117,15 +117,14 @@ def _progress_bar(current, target, width=10):
 
 def _get_all_trips():
     try:
-        db = get_db()
-        cur = db.cursor()
-        cur.execute(
-            "SELECT id, outbound_date, return_date, budget, best_price, "
-            "outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end, status "
-            "FROM trips WHERE status IN ('active', 'paused') ORDER BY outbound_date"
-        )
-        rows = cur.fetchall()
-        db.close()
+        with get_db() as db:
+            cur = db.cursor()
+            cur.execute(
+                "SELECT id, outbound_date, return_date, budget, best_price, "
+                "outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end, status "
+                "FROM trips WHERE status IN ('active', 'paused') ORDER BY outbound_date"
+            )
+            rows = cur.fetchall()
         return [
             {"id": r[0], "outbound_date": str(r[1]), "return_date": str(r[2]),
              "budget": r[3], "best_price": r[4],
@@ -336,10 +335,9 @@ def _health_check():
 
     # 2. 数据库
     try:
-        db = get_db()
-        c = db.cursor()
-        c.execute("SELECT 1")
-        db.close()
+        with get_db() as db:
+            c = db.cursor()
+            c.execute("SELECT 1")
         checks["db"] = "✅"
     except Exception as e:
         checks["db"] = f"❌ {e}"
@@ -404,15 +402,14 @@ def _handle_status():
 
 def _handle_history():
     try:
-        db = get_db()
-        c = db.cursor()
-        c.execute(
-            "SELECT cs.check_time, cs.best_total, cs.outbound_lowest, cs.return_lowest, "
-            "cs.best_outbound_airline, cs.best_return_airline, cs.trip_id "
-            "FROM check_summary cs ORDER BY cs.check_time DESC LIMIT 10"
-        )
-        rows = c.fetchall()
-        db.close()
+        with get_db() as db:
+            c = db.cursor()
+            c.execute(
+                "SELECT cs.check_time, cs.best_total, cs.outbound_lowest, cs.return_lowest, "
+                "cs.best_outbound_airline, cs.best_return_airline, cs.trip_id "
+                "FROM check_summary cs ORDER BY cs.check_time DESC LIMIT 10"
+            )
+            rows = c.fetchall()
 
         if not rows:
             tg_send("📈 暂无历史数据")
@@ -513,17 +510,16 @@ def _handle_callback(callback_id, data, message_id):
             ob_s, ob_e = [int(x) for x in ob_time.split("-")]
             rt_s, rt_e = [int(x) for x in rt_time.split("-")]
 
-            db = get_db()
-            c = db.cursor()
-            c.execute(
-                "INSERT INTO trips (outbound_date, return_date, budget, "
-                "outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                (ob_d, rt_d, bgt, ob_s, ob_e, rt_s, rt_e)
-            )
-            db.commit()
-            new_id = c.lastrowid
-            db.close()
+            with get_db() as db:
+                c = db.cursor()
+                c.execute(
+                    "INSERT INTO trips (outbound_date, return_date, budget, "
+                    "outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (ob_d, rt_d, bgt, ob_s, ob_e, rt_s, rt_e)
+                )
+                db.commit()
+                new_id = c.lastrowid
 
             tg_answer_callback(callback_id, f"✅ 行程#{new_id}已添加")
             countdown = _days_until(ob_d)
@@ -543,11 +539,10 @@ def _handle_callback(callback_id, data, message_id):
     elif data.startswith("trip_pause_"):
         tid = int(data.split("_")[-1])
         try:
-            db = get_db()
-            c = db.cursor()
-            c.execute("UPDATE trips SET status='paused' WHERE id=%s AND status='active'", (tid,))
-            db.commit()
-            db.close()
+            with get_db() as db:
+                c = db.cursor()
+                c.execute("UPDATE trips SET status='paused' WHERE id=%s AND status='active'", (tid,))
+                db.commit()
             tg_answer_callback(callback_id, f"⏸ 行程#{tid}已暂停")
             _handle_trips()  # 刷新列表
         except Exception as e:
@@ -556,11 +551,10 @@ def _handle_callback(callback_id, data, message_id):
     elif data.startswith("trip_resume_"):
         tid = int(data.split("_")[-1])
         try:
-            db = get_db()
-            c = db.cursor()
-            c.execute("UPDATE trips SET status='active' WHERE id=%s AND status='paused'", (tid,))
-            db.commit()
-            db.close()
+            with get_db() as db:
+                c = db.cursor()
+                c.execute("UPDATE trips SET status='active' WHERE id=%s AND status='paused'", (tid,))
+                db.commit()
             tg_answer_callback(callback_id, f"▶️ 行程#{tid}已恢复")
             _handle_trips()
         except Exception as e:
@@ -578,11 +572,10 @@ def _handle_callback(callback_id, data, message_id):
     elif data.startswith("trip_del_yes_"):
         tid = int(data.split("_")[-1])
         try:
-            db = get_db()
-            c = db.cursor()
-            c.execute("UPDATE trips SET status='deleted' WHERE id=%s", (tid,))
-            db.commit()
-            db.close()
+            with get_db() as db:
+                c = db.cursor()
+                c.execute("UPDATE trips SET status='deleted' WHERE id=%s", (tid,))
+                db.commit()
             tg_answer_callback(callback_id, f"🗑 已删除#{tid}")
             _handle_trips()
         except Exception as e:
@@ -593,11 +586,10 @@ def _handle_callback(callback_id, data, message_id):
         tg_answer_callback(callback_id)
         # 查当前值显示
         try:
-            db = get_db()
-            c = db.cursor()
-            c.execute("SELECT outbound_date, return_date, budget, outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end, outbound_flex, return_flex FROM trips WHERE id=%s", (tid,))
-            r = c.fetchone()
-            db.close()
+            with get_db() as db:
+                c = db.cursor()
+                c.execute("SELECT outbound_date, return_date, budget, outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end, outbound_flex, return_flex FROM trips WHERE id=%s", (tid,))
+                r = c.fetchone()
             if r:
                 ob_flex = r[7] or 0
                 rt_flex = r[8] if r[8] is not None else 1
@@ -674,7 +666,8 @@ async def tg_command_listener():
 
     while not shutdown_event.is_set():
         try:
-            resp = requests.get(
+            resp = await asyncio.to_thread(
+                requests.get,
                 f"https://api.telegram.org/bot{TG_BOT_TOKEN}/getUpdates",
                 params={"offset": last_update_id + 1, "timeout": 10},
                 timeout=15,
@@ -736,11 +729,10 @@ async def tg_command_listener():
                     if len(parts) >= 3:
                         try:
                             tid = int(parts[2])
-                            db = get_db()
-                            c = db.cursor()
-                            c.execute("UPDATE trips SET status='deleted' WHERE id=%s", (tid,))
-                            db.commit()
-                            db.close()
+                            with get_db() as db:
+                                c = db.cursor()
+                                c.execute("UPDATE trips SET status='deleted' WHERE id=%s", (tid,))
+                                db.commit()
                             tg_send(f"🗑 行程 #{tid} 已删除")
                         except Exception as e:
                             tg_send(f"❌ {e}")
@@ -749,11 +741,10 @@ async def tg_command_listener():
                     if len(parts) >= 3:
                         try:
                             tid = int(parts[2])
-                            db = get_db()
-                            c = db.cursor()
-                            c.execute("UPDATE trips SET status='paused' WHERE id=%s", (tid,))
-                            db.commit()
-                            db.close()
+                            with get_db() as db:
+                                c = db.cursor()
+                                c.execute("UPDATE trips SET status='paused' WHERE id=%s", (tid,))
+                                db.commit()
                             tg_send(f"⏸ 行程 #{tid} 已暂停")
                         except Exception as e:
                             tg_send(f"❌ {e}")
@@ -762,11 +753,10 @@ async def tg_command_listener():
                     if len(parts) >= 3:
                         try:
                             tid = int(parts[2])
-                            db = get_db()
-                            c = db.cursor()
-                            c.execute("UPDATE trips SET status='active' WHERE id=%s", (tid,))
-                            db.commit()
-                            db.close()
+                            with get_db() as db:
+                                c = db.cursor()
+                                c.execute("UPDATE trips SET status='active' WHERE id=%s", (tid,))
+                                db.commit()
                             tg_send(f"▶️ 行程 #{tid} 已恢复")
                         except Exception as e:
                             tg_send(f"❌ {e}")
@@ -775,11 +765,10 @@ async def tg_command_listener():
                     if len(parts) >= 4:
                         try:
                             tid, new_b = int(parts[2]), int(parts[3])
-                            db = get_db()
-                            c = db.cursor()
-                            c.execute("UPDATE trips SET budget=%s WHERE id=%s", (new_b, tid))
-                            db.commit()
-                            db.close()
+                            with get_db() as db:
+                                c = db.cursor()
+                                c.execute("UPDATE trips SET budget=%s WHERE id=%s", (new_b, tid))
+                                db.commit()
                             tg_send(f"💰 行程 #{tid} 预算已改为 ¥{new_b:,}(CNY)")
                         except Exception as e:
                             tg_send(f"❌ {e}")
@@ -797,12 +786,11 @@ async def tg_command_listener():
                             if rt_date <= ob_date:
                                 tg_send("❌ 回程日期必须晚于去程")
                             else:
-                                db = get_db()
-                                c = db.cursor()
-                                c.execute("UPDATE trips SET outbound_date=%s, return_date=%s WHERE id=%s",
-                                          (ob_d, rt_d, tid))
-                                db.commit()
-                                db.close()
+                                with get_db() as db:
+                                    c = db.cursor()
+                                    c.execute("UPDATE trips SET outbound_date=%s, return_date=%s WHERE id=%s",
+                                              (ob_d, rt_d, tid))
+                                    db.commit()
                                 tg_send(f"📅 行程 #{tid} 日期已更新\n去程: {ob_d} → 回程: {rt_d}")
                         except ValueError:
                             tg_send("❌ 日期格式错误，请用 YYYY-MM-DD")
@@ -820,12 +808,11 @@ async def tg_command_listener():
                             if ob_flex < 0 or rt_flex < 0 or ob_flex > 7 or rt_flex > 7:
                                 tg_send("❌ 弹性天数范围 0-7")
                             else:
-                                db = get_db()
-                                c = db.cursor()
-                                c.execute("UPDATE trips SET outbound_flex=%s, return_flex=%s WHERE id=%s",
-                                          (ob_flex, rt_flex, tid))
-                                db.commit()
-                                db.close()
+                                with get_db() as db:
+                                    c = db.cursor()
+                                    c.execute("UPDATE trips SET outbound_flex=%s, return_flex=%s WHERE id=%s",
+                                              (ob_flex, rt_flex, tid))
+                                    db.commit()
                                 tg_send(f"📆 行程 #{tid} 弹性已更新\n去程±{ob_flex}天 回程±{rt_flex}天")
                         except ValueError:
                             tg_send("❌ 格式: `/trip flex 编号 去N 回N`")
@@ -840,14 +827,13 @@ async def tg_command_listener():
                             tid = int(parts[2])
                             ob_s, ob_e = [int(x) for x in parts[3].replace("去", "").split("-")]
                             rt_s, rt_e = [int(x) for x in parts[4].replace("回", "").split("-")]
-                            db = get_db()
-                            c = db.cursor()
-                            c.execute(
-                                "UPDATE trips SET outbound_depart_start=%s, outbound_depart_end=%s, "
-                                "return_arrive_start=%s, return_arrive_end=%s WHERE id=%s",
-                                (ob_s, ob_e, rt_s, rt_e, tid))
-                            db.commit()
-                            db.close()
+                            with get_db() as db:
+                                c = db.cursor()
+                                c.execute(
+                                    "UPDATE trips SET outbound_depart_start=%s, outbound_depart_end=%s, "
+                                    "return_arrive_start=%s, return_arrive_end=%s WHERE id=%s",
+                                    (ob_s, ob_e, rt_s, rt_e, tid))
+                                db.commit()
                             tg_send(f"⏰ 行程 #{tid} 时间已更新\n🛫 去程{ob_s}-{ob_e}点 🛬 回程{rt_s}-{rt_e}点")
                         except Exception as e:
                             tg_send(f"❌ {e}")
