@@ -19,10 +19,6 @@ def now_jst():
 # 配置（全部从环境变量读取）
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")
-LLM_API_KEY = os.getenv("LLM_API_KEY", "")
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
-
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID", "")
 # 允许响应的 chat ID 列表（私聊 + 群聊）
@@ -50,15 +46,11 @@ DB_NAME = os.getenv("DB_NAME") or "test"
 
 # 数据持久化目录（Docker volume 挂载点）
 DATA_DIR = Path("/app/data")
-SCREENSHOT_DIR = DATA_DIR / "screenshots"
 PRICE_LOG = DATA_DIR / "price_log.jsonl"
 STATE_FILE = DATA_DIR / "state.json"
-BROWSER_PROFILE = DATA_DIR / "browser_profile"
 
-API_ONLY_MODE = os.getenv("API_ONLY_MODE", "false").lower() == "true"
 SOURCE_COOLDOWN_SECONDS = int(os.getenv("SOURCE_COOLDOWN_SECONDS") or "1800")
 SOURCE_MAX_CONSECUTIVE_FAILURES = int(os.getenv("SOURCE_MAX_CONSECUTIVE_FAILURES") or "3")
-SCREENSHOT_FALLBACK_LIMIT = int(os.getenv("SCREENSHOT_FALLBACK_LIMIT") or "4")
 SOURCE_REQUEST_BUDGET_PER_HOUR = int(os.getenv("SOURCE_REQUEST_BUDGET_PER_HOUR") or "60")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

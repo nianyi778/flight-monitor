@@ -14,7 +14,7 @@ from app.config import (
     SOURCE_COOLDOWN_SECONDS,
     SOURCE_MAX_CONSECUTIVE_FAILURES,
 )
-_SOURCE_NAMES = ("spring_api", "ctrip_api", "google_api", "browser_fallback")
+_SOURCE_NAMES = ("spring_api", "ctrip_api", "google_api")
 
 
 def ensure_runtime_state(state: dict) -> dict:
@@ -30,7 +30,6 @@ def ensure_runtime_state(state: dict) -> dict:
             "searches": 0,
             "real_requests": 0,
             "cache_hits": 0,
-            "browser_fallbacks": 0,
             "blocked_results": 0,
             "cooldown_events": 0,
             "valid_results": 0,
@@ -271,42 +270,9 @@ def penalize_proxy(state: dict, proxy_id: str | None, source: str, now_dt: datet
         proxy_state["disabled_until"] = (now_dt + timedelta(minutes=PROXY_STICKY_MINUTES)).isoformat()
 
 
-def choose_profile_id(state: dict, source: str, available_profiles: list[str], now_dt: datetime) -> str:
-    ensure_runtime_state(state)
-    assignments = state["profile_assignments"]
-    existing = assignments.get(source)
-    if existing and existing.get("profile_id") in available_profiles:
-        assigned_at = _parse_dt(existing.get("assigned_at"))
-        if assigned_at and now_dt - assigned_at < timedelta(minutes=PROXY_STICKY_MINUTES):
-            return existing["profile_id"]
-
-    usage = []
-    for profile_id in available_profiles:
-        last_used = datetime.min
-        for item in assignments.values():
-            if item.get("profile_id") == profile_id:
-                last_used = max(last_used, _parse_dt(item.get("assigned_at")) or datetime.min)
-        usage.append((last_used, profile_id))
-    usage.sort(key=lambda item: item[0])
-    profile_id = usage[0][1]
-    assignments[source] = {"profile_id": profile_id, "assigned_at": now_dt.isoformat()}
-    return profile_id
-
-
 def proxy_pool_summary(state: dict) -> dict:
     ensure_runtime_state(state)
     return state["proxy_pool_status"]
-
-
-def mark_skip_browser_until(state: dict, now_dt: datetime, seconds: int) -> None:
-    ensure_runtime_state(state)
-    state["browser_skip_until"] = (now_dt + timedelta(seconds=seconds)).isoformat()
-
-
-def browser_skip_active(state: dict, now_dt: datetime) -> bool:
-    ensure_runtime_state(state)
-    skip_until = _parse_dt(state.get("browser_skip_until"))
-    return bool(skip_until and skip_until > now_dt)
 
 
 def init_check_metrics(check_id: int, due_trips: int, total_searches: int, started_at: datetime) -> dict:
@@ -318,7 +284,6 @@ def init_check_metrics(check_id: int, due_trips: int, total_searches: int, start
         "searches": total_searches,
         "real_requests": 0,
         "cache_hits": 0,
-        "browser_fallbacks": 0,
         "blocked_results": 0,
         "valid_results": 0,
         "alerts": 0,
@@ -333,7 +298,6 @@ def record_check_metric_event(metrics: dict, source: str, *, from_cache: bool, s
         "cache_hits": 0,
         "blocked_results": 0,
         "valid_results": 0,
-        "browser_fallbacks": 0,
     })
     source_metrics = metrics["source_breakdown"][source]
     if from_cache:
@@ -342,9 +306,6 @@ def record_check_metric_event(metrics: dict, source: str, *, from_cache: bool, s
     else:
         metrics["real_requests"] += 1
         source_metrics["real_requests"] += 1
-    if request_mode == "browser":
-        metrics["browser_fallbacks"] += 1
-        source_metrics["browser_fallbacks"] += 1
     if status == "blocked":
         metrics["blocked_results"] += 1
         source_metrics["blocked_results"] += 1
@@ -364,7 +325,6 @@ def finalize_check_metrics(state: dict, metrics: dict, ended_at: datetime) -> di
     totals["searches"] += metrics["searches"]
     totals["real_requests"] += metrics["real_requests"]
     totals["cache_hits"] += metrics["cache_hits"]
-    totals["browser_fallbacks"] += metrics["browser_fallbacks"]
     totals["blocked_results"] += metrics["blocked_results"]
     totals["valid_results"] += metrics["valid_results"]
     totals["alerts"] += metrics["alerts"]

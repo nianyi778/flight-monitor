@@ -8,9 +8,8 @@ import signal
 
 from app.anti_bot import finalize_result_status, make_result
 from app.config import (
-    LLM_API_KEY, TG_BOT_TOKEN, CHECK_INTERVAL, PUSH_INTERVAL,
+    TG_BOT_TOKEN, CHECK_INTERVAL, PUSH_INTERVAL,
     DATA_DIR, now_jst, log, load_state, save_state,
-    API_ONLY_MODE, SCREENSHOT_FALLBACK_LIMIT,
 )
 from app.db import (
     get_active_trips, update_trip_best_price, save_to_db,
@@ -20,7 +19,6 @@ from app.matcher import find_best_combinations, get_search_urls
 from app.notifier import tg_send, format_alert_message, _brief_price
 from app.bot import setup_tg_commands, tg_command_listener, force_check_event
 from app.source_runtime import (
-    browser_skip_active,
     choose_proxy,
     ensure_runtime_state,
     finalize_check_metrics,
@@ -28,7 +26,6 @@ from app.source_runtime import (
     get_cached_search_result,
     get_source_status_snapshot,
     init_check_metrics,
-    mark_skip_browser_until,
     penalize_proxy,
     proxy_pool_summary,
     record_check_metric_event,
@@ -318,114 +315,6 @@ async def _run_check_inner(force, all_trips, bot_module):
             fetched = get_google_flights_for_searches(remaining, proxy_url=proxy.get("url"), proxy_id=proxy.get("id"))
             all_analysis.update(fetched)
             _record_results_for_source(state, "google_api", fetched, remaining)
-
-    # — 可选截图+LLM 兜底（仅非 API_ONLY_MODE 且 LLM_API_KEY 已配置）—
-    still_missing = [
-        s for s in unique_searches
-        if (
-            not all_analysis.get(s["url"], {}).get("flights")
-            and all_analysis.get(s["url"], {}).get("status") in {None, "no_data", "degraded"}
-        )
-    ]
-    if (
-        still_missing
-        and not API_ONLY_MODE
-        and LLM_API_KEY
-        and not source_in_cooldown(state, "browser_fallback", now_jst())
-        and not browser_skip_active(state, now_jst())
-    ):
-        still_missing = still_missing[:SCREENSHOT_FALLBACK_LIMIT]
-        log.info(f"  📸 {len(still_missing)} 个搜索无API结果，降级截图+LLM")
-        try:
-            from app.scraper import capture_screenshots_batch
-            from app.analyzer import analyze_screenshot, classify_screenshot_page, diagnose_failure_context
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            import os
-
-            _MIN_SIZE = 30 * 1024
-            screenshots = await capture_screenshots_batch(still_missing, runtime_state=state)
-            browser_results = {}
-            if screenshots:
-                def _analyze(ss):
-                    if ss.get("analysis"):
-                        analysis = ss["analysis"]
-                        analysis["diagnosis"] = diagnose_failure_context(analysis, ss)
-                        return ss["url"], analysis
-                    size = os.path.getsize(ss["path"])
-                    if size < _MIN_SIZE:
-                        analysis = make_result(
-                            source=ss["name"],
-                            url=ss["url"],
-                            flight_date=ss.get("flight_date", ""),
-                            error=f"截图过小({size//1024}KB)，疑似登录页",
-                            status="blocked",
-                            block_reason="login_wall",
-                            retryable=False,
-                            request_mode="browser",
-                            proxy_id=ss.get("proxy_id"),
-                            profile_id=ss.get("profile_id"),
-                        )
-                    else:
-                        page_classification = classify_screenshot_page(ss)
-                        page_state = page_classification.get("page_state", "normal")
-                        if page_state != "normal":
-                            mapped_status = "blocked" if page_state in {"blocked", "login_wall", "captcha"} else "degraded"
-                            analysis = make_result(
-                                source=ss["name"],
-                                url=ss["url"],
-                                flight_date=ss.get("flight_date", ""),
-                                error=f"页面分类结果: {page_state} - {page_classification.get('reason', '')}",
-                                status=mapped_status,
-                                block_reason=page_state if mapped_status == "blocked" else "partial",
-                                retryable=mapped_status != "blocked",
-                                request_mode="browser",
-                                proxy_id=ss.get("proxy_id"),
-                                profile_id=ss.get("profile_id"),
-                            )
-                        else:
-                            analysis = analyze_screenshot(ss)
-                            analysis["source"] = ss["name"]
-                            analysis["url"] = ss["url"]
-                            analysis["flight_date"] = ss.get("flight_date", "")
-                            analysis["request_mode"] = "browser"
-                            analysis["proxy_id"] = ss.get("proxy_id")
-                            analysis["profile_id"] = ss.get("profile_id")
-                        analysis["page_classifier"] = page_classification
-                    analysis = finalize_result_status(analysis)
-                    if analysis.get("status") != "ok":
-                        analysis["diagnosis"] = diagnose_failure_context(analysis, ss)
-                    else:
-                        analysis["diagnosis"] = {"action": "retry", "reason": "成功结果无需恢复动作", "retry_after_seconds": 0}
-                    return ss["url"], finalize_result_status(analysis)
-
-                with ThreadPoolExecutor(max_workers=4) as executor:
-                    futures = {executor.submit(_analyze, ss): ss for ss in screenshots}
-                    for future in as_completed(futures):
-                        ss = futures[future]
-                        try:
-                            url, analysis = future.result()
-                        except Exception as e:
-                            url = ss["url"]
-                            analysis = make_result(
-                                source=ss.get("name", ""),
-                                url=url,
-                                flight_date=ss.get("flight_date", ""),
-                                error=str(e),
-                                status="degraded",
-                                block_reason="network",
-                                retryable=True,
-                                request_mode="browser",
-                                proxy_id=ss.get("proxy_id"),
-                                profile_id=ss.get("profile_id"),
-                            )
-                            analysis["diagnosis"] = diagnose_failure_context(analysis, ss)
-                        browser_results[url] = analysis
-                        # 不覆盖已有结果
-                        if url not in all_analysis or not all_analysis[url].get("flights"):
-                            all_analysis[url] = analysis
-                _record_results_for_source(state, "browser_fallback", browser_results, still_missing)
-        except ImportError:
-            log.warning("  ⚠️ Playwright 未安装，截图兜底不可用")
 
     # 汇总日志
     got = sum(1 for a in all_analysis.values() if a.get("flights"))
