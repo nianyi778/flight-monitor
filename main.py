@@ -15,7 +15,7 @@ import threading
 def run_mcp_server():
     """在独立线程中运行 MCP SSE Server"""
     from app.mcp_server import mcp
-    port = int(os.getenv("MCP_PORT") or "8080")
+    port = int(os.getenv("MCP_PORT") or "8081")
     mcp.run(transport="sse", host="0.0.0.0", port=port)
 
 
@@ -31,7 +31,7 @@ if __name__ == "__main__":
     if mcp_enabled:
         mcp_thread = threading.Thread(target=run_mcp_server, daemon=True)
         mcp_thread.start()
-        print(f"🔌 MCP Server started on port {os.getenv('MCP_PORT', '8080')}")
+        print(f"🔌 MCP Server started on port {os.getenv('MCP_PORT', '8081')}")
 
     # 主循环（TG Bot + 价格监控）
     asyncio.run(run_main())

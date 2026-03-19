@@ -30,10 +30,10 @@ app/
 
 ### 机场覆盖
 
-|  | PVG(浦东) | SHA(虹桥) |
-|--|-----------|-----------|
-| NRT(成田) | 携程 + 春秋API + Google | 携程 |
-| HND(羽田) | 携程 + 春秋API | 携程 |
+|  | PVG(浦东) |
+|--|-----------|
+| NRT(成田) | 携程 + 春秋API + Google |
+| HND(羽田) | 携程 + 春秋API |
 
 ### 航司覆盖
 
@@ -50,7 +50,7 @@ app/
 
 - `playwright-stealth` 插件（社区维护）
 - UA 池 + 分辨率池随机
-- 页面间 8-15 秒随机延迟 + 鼠标移动模拟
+- 页面间 5-10 秒随机延迟 + 鼠标移动模拟
 - 住宅代理（PROXY_URL）支持
 - 持久化浏览器 profile（复用指纹）
 
@@ -77,55 +77,83 @@ app/
 
 **Resources**: `trips://active`, `system://status`
 
-连接地址：`http://<host>:8081/sse`
+**HTTP**: `GET http://<host>:8081/health` — 轻量健康检查（不调用 LLM，适合外部监控轮询）
+
+SSE 连接地址：`http://<host>:8081/sse`
 
 ## 部署
 
+### 前置条件
+
+- TiDB Cloud（或 MySQL 5.7+）— 建好三张表（见下文 SQL）
+- Telegram Bot Token + Chat ID
+- OpenAI 兼容的 LLM API Key（用于截图视觉分析）
+
 ### 环境变量
 
-| 变量 | 必填 | 说明 |
-|------|------|------|
-| `LLM_BASE_URL` | ✅ | LLM API 地址（OpenAI 兼容） |
-| `LLM_API_KEY` | ✅ | LLM API Key |
-| `LLM_MODEL` | | 模型名，默认 `gpt-4o`（实际分析全部用 `gpt-4o-mini`，此变量仅供 health check 展示） |
-| `TG_BOT_TOKEN` | ✅ | Telegram Bot Token |
-| `TG_CHAT_ID` | ✅ | Telegram 私聊 Chat ID |
-| `TG_GROUP_IDS` | | 群聊 Chat ID（逗号分隔） |
-| `CHECK_INTERVAL` | | 基础检查间隔(秒)，默认 `3600` |
-| `DB_HOST` | ✅ | TiDB/MySQL 主机 |
-| `DB_PORT` | | 端口，默认 `4000` |
-| `DB_USER` | ✅ | 数据库用户 |
-| `DB_PASSWORD` | ✅ | 数据库密码 |
-| `DB_NAME` | | 数据库名，默认 `test` |
-| `PROXY_URL` | | 住宅代理，如 `http://ip:port` |
-| `MCP_ENABLED` | | MCP Server 开关，默认 `true` |
-| `MCP_PORT` | | MCP 端口，默认 `8080` |
+| 变量 | 必填 | 默认值 | 说明 |
+|------|------|--------|------|
+| `LLM_BASE_URL` | ✅ | — | LLM API 地址（OpenAI 兼容） |
+| `LLM_API_KEY` | ✅ | — | LLM API Key |
+| `LLM_MODEL` | | `gpt-4o-mini` | 仅供 health check 展示；实际截图分析固定使用 `gpt-4o-mini` |
+| `TG_BOT_TOKEN` | ✅ | — | Telegram Bot Token |
+| `TG_CHAT_ID` | ✅ | — | Telegram 私聊 Chat ID |
+| `TG_GROUP_IDS` | | — | 群聊 Chat ID（逗号分隔，如 `-100123,-100456`） |
+| `DB_HOST` | ✅ | — | TiDB/MySQL 主机 |
+| `DB_PORT` | | `4000` | 端口 |
+| `DB_USER` | ✅ | — | 数据库用户 |
+| `DB_PASSWORD` | ✅ | — | 数据库密码 |
+| `DB_NAME` | | `flight_monitor` | 数据库名 |
+| `CHECK_INTERVAL` | | `3600` | 基础检查间隔(秒)；实际按倒计时分频 |
+| `PUSH_INTERVAL` | | `3600` | 价格提醒推送间隔(秒) |
+| `PROXY_URL` | | — | 住宅代理，如 `http://user:pass@host:port` |
+| `MCP_ENABLED` | | `true` | MCP Server 开关 |
+| `MCP_PORT` | | `8081` | MCP Server 端口 |
 
-### Docker Compose (Dokploy)
+### Docker Compose
+
+复制 `.env.example` 为 `.env`，填入真实值，然后：
+
+```bash
+docker compose up -d
+```
+
+或直接传入环境变量：
 
 ```yaml
 services:
   flight-monitor:
-    image: ghcr.io/nianyi778/flight-monitor:v3.6
+    image: ghcr.io/nianyi778/flight-monitor:v3.15
     restart: unless-stopped
     ports:
       - "8081:8081"
     environment:
-      - LLM_BASE_URL=https://your-api/v1
+      - LLM_BASE_URL=https://api.openai.com/v1
       - LLM_API_KEY=sk-xxx
-      - LLM_MODEL=gpt-4o
+      - LLM_MODEL=gpt-4o-mini
       - TG_BOT_TOKEN=xxx
       - TG_CHAT_ID=xxx
       - TG_GROUP_IDS=-100xxx
-      - CHECK_INTERVAL=3600
-      - DB_HOST=xxx
+      - DB_HOST=xxx.tidbcloud.com
       - DB_PORT=4000
       - DB_USER=xxx
       - DB_PASSWORD=xxx
-      - DB_NAME=test
-      - PROXY_URL=http://ip:port
+      - DB_NAME=flight_monitor
+      - CHECK_INTERVAL=3600
+      - PUSH_INTERVAL=3600
+      - PROXY_URL=http://user:pass@host:port
       - MCP_ENABLED=true
       - MCP_PORT=8081
+    volumes:
+      - flight-data:/app/data
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    shm_size: "1gb"
+
+volumes:
+  flight-data:
 ```
 
 ### 数据库
@@ -234,10 +262,7 @@ ORDER BY min_price;
 | v3.2 | 智能调度：日期去重 + 分频检查 |
 | v3.1 | MCP Server 集成 |
 | v2.8 | 弹性日期搜索 |
-| v2.7 | 确认收到修复 |
-| v2.3 | /health 健康检查 + /status 增强 |
 | v2.0 | playwright-stealth + 住宅代理 |
-| v1.8 | trip add 严格校验 + 预览确认 |
 | v1.6 | TG Inline Keyboard 交互 |
 | v1.4 | 模块化架构重构 |
 | v1.0 | 初始版本 |

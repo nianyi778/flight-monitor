@@ -1,21 +1,34 @@
 services:
   flight-monitor:
-    build: .
+    image: ghcr.io/nianyi778/flight-monitor:v3.15
+    # 本地构建时改用: build: .
     container_name: flight-monitor
     restart: unless-stopped
+    ports:
+      - "8081:8081"
     environment:
+      # LLM API（OpenAI 兼容）
       - LLM_BASE_URL=${LLM_BASE_URL}
       - LLM_API_KEY=${LLM_API_KEY}
-      - LLM_MODEL=${LLM_MODEL:-gpt-4o}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
+      # Telegram
       - TG_BOT_TOKEN=${TG_BOT_TOKEN}
       - TG_CHAT_ID=${TG_CHAT_ID}
-      - OUTBOUND_DATE=${OUTBOUND_DATE:-2026-09-18}
-      - RETURN_DATE=${RETURN_DATE:-2026-09-27}
-      - BUDGET_TOTAL=${BUDGET_TOTAL:-1500}
-      - OUTBOUND_DEPART_AFTER=${OUTBOUND_DEPART_AFTER:-19}
-      - RETURN_ARRIVE_BEFORE=${RETURN_ARRIVE_BEFORE:-6}
+      - TG_GROUP_IDS=${TG_GROUP_IDS:-}
+      # 数据库
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT:-4000}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME:-flight_monitor}
+      # 调度
       - CHECK_INTERVAL=${CHECK_INTERVAL:-3600}
-      - PUSH_INTERVAL=${PUSH_INTERVAL:-60}
+      - PUSH_INTERVAL=${PUSH_INTERVAL:-3600}
+      # 代理（可选）
+      - PROXY_URL=${PROXY_URL:-}
+      # MCP Server
+      - MCP_ENABLED=${MCP_ENABLED:-true}
+      - MCP_PORT=${MCP_PORT:-8081}
     volumes:
       - flight-data:/app/data
     deploy:
