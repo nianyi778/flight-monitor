@@ -282,6 +282,57 @@ def _validate_trip_input(text):
     }, None
 
 
+def _validate_budget_value(value):
+    try:
+        budget = int(value)
+    except Exception:
+        return None, "❌ 预算必须是整数"
+    if not (100 <= budget <= 50000):
+        return None, "❌ 预算范围 100-50000"
+    return budget, None
+
+
+def _validate_date_pair(ob_d, rt_d):
+    try:
+        ob_date = datetime.strptime(ob_d, "%Y-%m-%d").date()
+        rt_date = datetime.strptime(rt_d, "%Y-%m-%d").date()
+    except ValueError:
+        return None, "❌ 日期格式错误，请用 YYYY-MM-DD"
+
+    today = now_jst().date()
+    if ob_date <= today:
+        return None, f"❌ 去程日期 `{ob_d}` 已过期（今天是 {today}）"
+    if rt_date <= ob_date:
+        return None, "❌ 回程日期必须晚于去程"
+    return (ob_d, rt_d), None
+
+
+def _parse_window_arg(raw, prefix, label):
+    if not raw.startswith(prefix):
+        return None, f"❌ {label}格式错误，应为 `{prefix}HH-HH`"
+    try:
+        start, end = [int(x) for x in raw.replace(prefix, "").split("-")]
+    except Exception:
+        return None, f"❌ {label}格式错误，应为 `{prefix}HH-HH`"
+    if not (0 <= start <= 23 and 0 <= end <= 23):
+        return None, f"❌ {label}超出范围 (0-23)"
+    if start > end:
+        return None, f"❌ {label}起始应小于等于结束"
+    return (start, end), None
+
+
+def _parse_flex_arg(raw, prefix, label):
+    if not raw.startswith(prefix):
+        return None, f"❌ {label}格式错误，应为 `{prefix}N`"
+    try:
+        value = int(raw.replace(prefix, ""))
+    except Exception:
+        return None, f"❌ {label}格式错误，应为 `{prefix}N`"
+    if not (0 <= value <= 7):
+        return None, f"❌ {label}范围 0-7"
+    return value, None
+
+
 def _handle_trip_add(text):
     """校验 → 预览确认 → 等用户点按钮才写入数据库"""
     data, error = _validate_trip_input(text)
@@ -764,7 +815,11 @@ async def tg_command_listener():
                     parts = text.split()
                     if len(parts) >= 4:
                         try:
-                            tid, new_b = int(parts[2]), int(parts[3])
+                            tid = int(parts[2])
+                            new_b, error = _validate_budget_value(parts[3])
+                            if error:
+                                tg_send(error)
+                                continue
                             with get_db() as db:
                                 c = db.cursor()
                                 c.execute("UPDATE trips SET budget=%s WHERE id=%s", (new_b, tid))
@@ -780,20 +835,18 @@ async def tg_command_listener():
                         try:
                             tid = int(parts[2])
                             ob_d, rt_d = parts[3], parts[4]
-                            # 校验
-                            ob_date = datetime.strptime(ob_d, "%Y-%m-%d").date()
-                            rt_date = datetime.strptime(rt_d, "%Y-%m-%d").date()
-                            if rt_date <= ob_date:
-                                tg_send("❌ 回程日期必须晚于去程")
-                            else:
-                                with get_db() as db:
-                                    c = db.cursor()
-                                    c.execute("UPDATE trips SET outbound_date=%s, return_date=%s WHERE id=%s",
-                                              (ob_d, rt_d, tid))
-                                    db.commit()
-                                tg_send(f"📅 行程 #{tid} 日期已更新\n去程: {ob_d} → 回程: {rt_d}")
+                            _, error = _validate_date_pair(ob_d, rt_d)
+                            if error:
+                                tg_send(error)
+                                continue
+                            with get_db() as db:
+                                c = db.cursor()
+                                c.execute("UPDATE trips SET outbound_date=%s, return_date=%s WHERE id=%s",
+                                          (ob_d, rt_d, tid))
+                                db.commit()
+                            tg_send(f"📅 行程 #{tid} 日期已更新\n去程: {ob_d} → 回程: {rt_d}")
                         except ValueError:
-                            tg_send("❌ 日期格式错误，请用 YYYY-MM-DD")
+                            tg_send("❌ 编号必须是整数")
                         except Exception as e:
                             tg_send(f"❌ {e}")
                     else:
@@ -803,19 +856,22 @@ async def tg_command_listener():
                     if len(parts) >= 5:
                         try:
                             tid = int(parts[2])
-                            ob_flex = int(parts[3].replace("去", ""))
-                            rt_flex = int(parts[4].replace("回", ""))
-                            if ob_flex < 0 or rt_flex < 0 or ob_flex > 7 or rt_flex > 7:
-                                tg_send("❌ 弹性天数范围 0-7")
-                            else:
-                                with get_db() as db:
-                                    c = db.cursor()
-                                    c.execute("UPDATE trips SET outbound_flex=%s, return_flex=%s WHERE id=%s",
-                                              (ob_flex, rt_flex, tid))
-                                    db.commit()
-                                tg_send(f"📆 行程 #{tid} 弹性已更新\n去程±{ob_flex}天 回程±{rt_flex}天")
+                            ob_flex, error = _parse_flex_arg(parts[3], "去", "去程弹性")
+                            if error:
+                                tg_send(error)
+                                continue
+                            rt_flex, error = _parse_flex_arg(parts[4], "回", "回程弹性")
+                            if error:
+                                tg_send(error)
+                                continue
+                            with get_db() as db:
+                                c = db.cursor()
+                                c.execute("UPDATE trips SET outbound_flex=%s, return_flex=%s WHERE id=%s",
+                                          (ob_flex, rt_flex, tid))
+                                db.commit()
+                            tg_send(f"📆 行程 #{tid} 弹性已更新\n去程±{ob_flex}天 回程±{rt_flex}天")
                         except ValueError:
-                            tg_send("❌ 格式: `/trip flex 编号 去N 回N`")
+                            tg_send("❌ 编号必须是整数")
                         except Exception as e:
                             tg_send(f"❌ {e}")
                     else:
@@ -825,8 +881,16 @@ async def tg_command_listener():
                     if len(parts) >= 5:
                         try:
                             tid = int(parts[2])
-                            ob_s, ob_e = [int(x) for x in parts[3].replace("去", "").split("-")]
-                            rt_s, rt_e = [int(x) for x in parts[4].replace("回", "").split("-")]
+                            ob_window, error = _parse_window_arg(parts[3], "去", "去程时间")
+                            if error:
+                                tg_send(error)
+                                continue
+                            rt_window, error = _parse_window_arg(parts[4], "回", "回程时间")
+                            if error:
+                                tg_send(error)
+                                continue
+                            ob_s, ob_e = ob_window
+                            rt_s, rt_e = rt_window
                             with get_db() as db:
                                 c = db.cursor()
                                 c.execute(
@@ -835,6 +899,8 @@ async def tg_command_listener():
                                     (ob_s, ob_e, rt_s, rt_e, tid))
                                 db.commit()
                             tg_send(f"⏰ 行程 #{tid} 时间已更新\n🛫 去程{ob_s}-{ob_e}点 🛬 回程{rt_s}-{rt_e}点")
+                        except ValueError:
+                            tg_send("❌ 编号必须是整数")
                         except Exception as e:
                             tg_send(f"❌ {e}")
                     else:

@@ -5,6 +5,14 @@
 from datetime import datetime, timedelta
 
 
+def _parse_hour(value):
+    """把 HH:MM 格式解析为小时，失败返回 None。"""
+    try:
+        return int(str(value).split(":")[0])
+    except Exception:
+        return None
+
+
 def _date_range(base_date_str, flex_days, direction="before"):
     """生成日期列表：base_date 向前(before)或向后(after) flex_days 天"""
     base = datetime.strptime(base_date_str, "%Y-%m-%d").date()
@@ -83,24 +91,32 @@ def get_search_urls(trip):
 def find_best_combinations(results, trip):
     """找出符合条件的最优往返组合"""
     depart_after = trip.get("depart_after", 19)
+    depart_before = trip.get("depart_before", 23)
+    arrive_after = trip.get("arrive_after", 0)
+    arrive_before = trip.get("arrive_before", 6)
     budget = trip.get("budget", 1500)
 
     outbound_flights = []
     for src in results["outbound"]:
         for f in src.get("flights", []):
-            try:
-                dep_hour = int(f["departure_time"].split(":")[0])
-                if dep_hour >= depart_after:
-                    f["_source"] = src["source"]
-                    f["_url"] = src["url"]
-                    f["_flight_date"] = src.get("flight_date", trip["outbound_date"])
-                    outbound_flights.append(f)
-            except:
+            dep_hour = _parse_hour(f.get("departure_time"))
+            if dep_hour is None:
                 continue
+            if not (depart_after <= dep_hour <= depart_before):
+                continue
+            f["_source"] = src["source"]
+            f["_url"] = src["url"]
+            f["_flight_date"] = src.get("flight_date", trip["outbound_date"])
+            outbound_flights.append(f)
 
     return_flights = []
     for src in results["return"]:
         for f in src.get("flights", []):
+            arr_hour = _parse_hour(f.get("arrival_time"))
+            if arr_hour is None:
+                continue
+            if not (arrive_after <= arr_hour <= arrive_before):
+                continue
             f["_source"] = src["source"]
             f["_url"] = src["url"]
             f["_flight_date"] = src.get("flight_date", trip["return_date"])

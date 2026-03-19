@@ -24,6 +24,91 @@ mcp = FastMCP(
 )
 
 
+def _validate_trip_fields(payload: dict, existing_trip: dict | None = None) -> dict | None:
+    """校验 MCP 写入 trips 的字段。返回错误 dict，成功返回 None。"""
+    outbound_date = payload.get("outbound_date", existing_trip.get("outbound_date") if existing_trip else None)
+    return_date = payload.get("return_date", existing_trip.get("return_date") if existing_trip else None)
+
+    try:
+        ob = datetime.strptime(outbound_date, "%Y-%m-%d").date()
+        rt = datetime.strptime(return_date, "%Y-%m-%d").date()
+    except Exception:
+        return {"error": "日期格式错误，请用 YYYY-MM-DD"}
+
+    if ob <= now_jst().date():
+        return {"error": "去程日期已过期"}
+    if rt <= ob:
+        return {"error": "回程日期必须晚于去程日期"}
+
+    budget = payload.get("budget", existing_trip.get("budget") if existing_trip else 1500)
+    try:
+        budget_value = int(budget)
+    except Exception:
+        return {"error": "预算必须是整数"}
+    if not (100 <= budget_value <= 50000):
+        return {"error": "预算范围 100-50000"}
+
+    hour_fields = {
+        "depart_start": payload.get("depart_start", existing_trip.get("depart_start") if existing_trip else 19),
+        "depart_end": payload.get("depart_end", existing_trip.get("depart_end") if existing_trip else 23),
+        "arrive_start": payload.get("arrive_start", existing_trip.get("arrive_start") if existing_trip else 0),
+        "arrive_end": payload.get("arrive_end", existing_trip.get("arrive_end") if existing_trip else 6),
+    }
+    normalized_hours = {}
+    for name, value in hour_fields.items():
+        try:
+            normalized_hours[name] = int(value)
+        except Exception:
+            return {"error": f"{name} 必须是 0-23 的整数"}
+        if not (0 <= normalized_hours[name] <= 23):
+            return {"error": f"{name} 必须在 0-23"}
+    if normalized_hours["depart_start"] > normalized_hours["depart_end"]:
+        return {"error": "去程时间窗口无效"}
+    if normalized_hours["arrive_start"] > normalized_hours["arrive_end"]:
+        return {"error": "回程时间窗口无效"}
+
+    flex_fields = {
+        "outbound_flex": payload.get("outbound_flex", existing_trip.get("outbound_flex") if existing_trip else 0),
+        "return_flex": payload.get("return_flex", existing_trip.get("return_flex") if existing_trip else 1),
+    }
+    for name, value in flex_fields.items():
+        try:
+            flex_value = int(value)
+        except Exception:
+            return {"error": f"{name} 必须是 0-7 的整数"}
+        if not (0 <= flex_value <= 7):
+            return {"error": f"{name} 必须在 0-7"}
+
+    return None
+
+
+def _get_trip_for_update(trip_id: int) -> dict | None:
+    with get_db() as db:
+        c = db.cursor()
+        c.execute(
+            "SELECT outbound_date, return_date, budget, "
+            "outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end, "
+            "outbound_flex, return_flex, status "
+            "FROM trips WHERE id=%s",
+            (trip_id,),
+        )
+        row = c.fetchone()
+    if not row:
+        return None
+    return {
+        "outbound_date": str(row[0]),
+        "return_date": str(row[1]),
+        "budget": row[2],
+        "depart_start": row[3],
+        "depart_end": row[4],
+        "arrive_start": row[5],
+        "arrive_end": row[6],
+        "outbound_flex": row[7] or 0,
+        "return_flex": row[8] if row[8] is not None else 1,
+        "status": row[9],
+    }
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Tools（A 机器人可以调用的操作）
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -81,19 +166,19 @@ def add_trip(
     Returns:
         新行程的 ID 和详情
     """
-    # 校验
-    try:
-        ob = datetime.strptime(outbound_date, "%Y-%m-%d").date()
-        rt = datetime.strptime(return_date, "%Y-%m-%d").date()
-    except ValueError:
-        return {"error": "日期格式错误，请用 YYYY-MM-DD"}
-
-    if rt <= ob:
-        return {"error": "回程日期必须晚于去程日期"}
-    if ob <= now_jst().date():
-        return {"error": "去程日期已过期"}
-    if not (100 <= budget <= 50000):
-        return {"error": "预算范围 100-50000"}
+    error = _validate_trip_fields({
+        "outbound_date": outbound_date,
+        "return_date": return_date,
+        "budget": budget,
+        "depart_start": depart_start,
+        "depart_end": depart_end,
+        "arrive_start": arrive_start,
+        "arrive_end": arrive_end,
+        "outbound_flex": outbound_flex,
+        "return_flex": return_flex,
+    })
+    if error:
+        return error
 
     with get_db() as db:
         c = db.cursor()
@@ -169,6 +254,29 @@ def edit_trip(
 
     if not updates:
         return {"error": "没有要修改的字段"}
+
+    existing_trip = _get_trip_for_update(trip_id)
+    if not existing_trip:
+        return {"error": f"行程#{trip_id}不存在"}
+    if existing_trip["status"] != "active":
+        return {"error": f"行程#{trip_id}不存在或不是active状态"}
+
+    error = _validate_trip_fields(
+        {
+            "outbound_date": outbound_date,
+            "return_date": return_date,
+            "budget": budget,
+            "depart_start": depart_start,
+            "depart_end": depart_end,
+            "arrive_start": arrive_start,
+            "arrive_end": arrive_end,
+            "outbound_flex": outbound_flex,
+            "return_flex": return_flex,
+        },
+        existing_trip=existing_trip,
+    )
+    if error:
+        return error
 
     set_clause = ", ".join(f"{k}=%s" for k in updates)
     values = list(updates.values()) + [trip_id]

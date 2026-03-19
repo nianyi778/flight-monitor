@@ -15,7 +15,7 @@ from app.db import (
     get_active_trips, update_trip_best_price, save_to_db,
     already_checked_this_hour,
 )
-from app.matcher import find_best_combinations
+from app.matcher import find_best_combinations, get_search_urls
 from app.notifier import tg_send, format_alert_message, _brief_price
 from app.bot import setup_tg_commands, tg_command_listener, force_check_event
 
@@ -276,7 +276,7 @@ async def _run_check_inner(force, all_trips, bot_module):
                         "price_cny": spring_best["outbound_cny"],
                         "original_currency": "USD",
                         "_source": "春秋官网",
-                        "_url": f"https://en.ch.com/NRT-PVG/?date={spring_best['outbound_date']}",
+                        "_url": f"https://en.ch.com/{spring_best['outbound_route'].replace('→', '-')}/?date={spring_best['outbound_date']}",
                         "_flight_date": spring_best["outbound_date"],
                     },
                     "return": {
@@ -285,7 +285,7 @@ async def _run_check_inner(force, all_trips, bot_module):
                         "price_cny": spring_best["return_cny"],
                         "original_currency": "USD",
                         "_source": "春秋官网",
-                        "_url": f"https://en.ch.com/PVG-NRT/?date={spring_best['return_date']}",
+                        "_url": f"https://en.ch.com/{spring_best['return_route'].replace('→', '-')}/?date={spring_best['return_date']}",
                         "_flight_date": spring_best["return_date"],
                     },
                     "total": spring_best["total_cny"],

@@ -81,8 +81,10 @@ def save_to_db(results, combos, trip):
             # 写入每条航班记录
             flights_count = 0
             for direction in ["outbound", "return"]:
-                flight_date = trip["outbound_date"] if direction == "outbound" else trip["return_date"]
                 for src in results[direction]:
+                    source_flight_date = src.get("flight_date") or (
+                        trip["outbound_date"] if direction == "outbound" else trip["return_date"]
+                    )
                     for f in src.get("flights", []):
                         cur.execute(
                             """INSERT INTO flight_prices
@@ -96,7 +98,7 @@ def save_to_db(results, combos, trip):
                              f.get("origin", ""), f.get("destination", ""),
                              f.get("price_cny"), f.get("original_price"),
                              f.get("original_currency", "CNY"), f.get("stops", 0),
-                             flight_date)
+                             source_flight_date)
                         )
                         flights_count += 1
 
