@@ -23,12 +23,15 @@ from app.source_runtime import (
     browser_skip_active,
     choose_proxy,
     ensure_runtime_state,
+    finalize_check_metrics,
     force_source_cooldown,
     get_cached_search_result,
     get_source_status_snapshot,
+    init_check_metrics,
     mark_skip_browser_until,
     penalize_proxy,
     proxy_pool_summary,
+    record_check_metric_event,
     record_proxy_outcome,
     record_source_outcome,
     source_in_cooldown,
@@ -143,6 +146,7 @@ def _record_results_for_source(state, source_name, results, searches):
     last_reason = None
 
     for url, result in results.items():
+        result["source_runtime"] = source_name
         search = by_url.get(url)
         if search:
             store_cached_search_result(state, search, result, now_dt)
@@ -189,9 +193,15 @@ def _load_cached_results(state, searches):
     now_dt = now_jst()
     cached = {}
     remaining = []
+    source_name_map = {
+        "ctrip": "ctrip_api",
+        "google": "google_api",
+        "spring": "spring_api",
+    }
     for search in searches:
         hit = get_cached_search_result(state, search, now_dt)
         if hit:
+            hit["source_runtime"] = source_name_map.get(search.get("source_type"), hit.get("source_runtime", "unknown"))
             cached[search["url"]] = hit
         else:
             remaining.append(search)
@@ -246,6 +256,7 @@ async def _run_check_inner(force, all_trips, bot_module):
     """run_check 的实际逻辑，由 run_check 负责重置 checking_in_progress 标志"""
     state = load_state()
     ensure_runtime_state(state)
+    started_at = now_jst()
     check_count = state.get("check_count", 0) + 1
     state["check_count"] = check_count
 
@@ -269,6 +280,12 @@ async def _run_check_inner(force, all_trips, bot_module):
     total_unique = len(url_map)
     total_raw = sum(len(v) for v in trip_search_map.values())
     saved = total_raw - total_unique
+    check_metrics = init_check_metrics(
+        check_id=check_count,
+        due_trips=len(due_trips),
+        total_searches=total_unique,
+        started_at=started_at,
+    )
 
     log.info(f"🔍 搜索去重: {total_raw}个 → {total_unique}个（节省{saved}次抓取）")
 
@@ -414,6 +431,14 @@ async def _run_check_inner(force, all_trips, bot_module):
     got = sum(1 for a in all_analysis.values() if a.get("flights"))
     log.info(f"  📊 API结果: {got}/{len(unique_searches)} 个搜索有航班数据")
     for url, a in all_analysis.items():
+        record_check_metric_event(
+            check_metrics,
+            a.get("source_runtime", a.get("source_type") or a.get("request_mode") or a.get("source") or "unknown"),
+            from_cache=bool(a.get("from_cache")),
+            status=a.get("status", "no_data"),
+            has_flights=bool(a.get("flights")),
+            request_mode=a.get("request_mode", "api"),
+        )
         _log_request_result(a, trip_ids=url_map.get(url, {}).get("trip_ids", []))
         if a.get("error") and not a.get("flights"):
             log.warning(f"  ⚠️ {a['error']}")
@@ -425,6 +450,7 @@ async def _run_check_inner(force, all_trips, bot_module):
     if state.get("runtime_alerts"):
         latest = state["runtime_alerts"][-1]
         log.warning(f"🚨 最近告警: {latest.get('source')} / {latest.get('reason')}")
+    check_metrics["alerts"] = len(state.get("runtime_alerts", []))
 
     # 5. 分发结果到各行程
     brief_lines = [f"🕐 *{now_jst().strftime('%H:%M')} 巡查报告* (第{check_count}次 | {len(due_trips)}个行程 {total_unique}次抓取)\n"]
@@ -537,6 +563,21 @@ async def _run_check_inner(force, all_trips, bot_module):
         except Exception as e:
             log.error(f"行程 #{trip['id']} 处理失败: {e}", exc_info=True)
             brief_lines.append(f"✈️ *#{trip['id']}* 处理失败: {e}")
+
+    finalized_metrics = finalize_check_metrics(state, check_metrics, now_jst())
+    log.info(
+        "📈 check=%s trips=%s searches=%s real=%s cache=%s browser=%s blocked=%s valid=%s cooldown=%s duration_ms=%s",
+        finalized_metrics.get("check_id"),
+        finalized_metrics.get("due_trips"),
+        finalized_metrics.get("searches"),
+        finalized_metrics.get("real_requests"),
+        finalized_metrics.get("cache_hits"),
+        finalized_metrics.get("browser_fallbacks"),
+        finalized_metrics.get("blocked_results"),
+        finalized_metrics.get("valid_results"),
+        finalized_metrics.get("cooldown_active_sources"),
+        finalized_metrics.get("duration_ms"),
+    )
 
     save_state(state)
 
