@@ -95,7 +95,7 @@ SSE 连接地址：`http://<host>:8081/sse`
 |------|------|--------|------|
 | `LLM_BASE_URL` | ✅ | — | LLM API 地址（OpenAI 兼容） |
 | `LLM_API_KEY` | ✅ | — | LLM API Key |
-| `LLM_MODEL` | | `gpt-4o-mini` | 仅供 health check 展示；实际截图分析固定使用 `gpt-4o-mini` |
+| `LLM_MODEL` | | `gpt-4o` | 仅供 health check 连通性测试；实际截图分析固定使用 `gpt-4o-mini` |
 | `TG_BOT_TOKEN` | ✅ | — | Telegram Bot Token |
 | `TG_CHAT_ID` | ✅ | — | Telegram 私聊 Chat ID |
 | `TG_GROUP_IDS` | | — | 群聊 Chat ID（逗号分隔，如 `-100123,-100456`） |
