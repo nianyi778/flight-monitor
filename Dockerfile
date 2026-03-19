@@ -2,13 +2,15 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# 安装 Node.js 20 LTS（携程 DOM 抓取需要 agent-browser / npx）
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g agent-browser \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# 如需启用截图兜底，取消注释以下两行（镜像会增加约 1.3GB）：
-# RUN python -m playwright install --with-deps chromium \
-#     && apt-get install -y --no-install-recommends fonts-noto-cjk \
-#     && rm -rf /var/lib/apt/lists/*
 
 COPY main.py .
 COPY app/ app/

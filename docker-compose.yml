@@ -1,6 +1,6 @@
 services:
   flight-monitor:
-    image: ghcr.io/nianyi778/flight-monitor:v4.5
+    image: ghcr.io/nianyi778/flight-monitor:v4.6
     # 本地构建时改用: build: .
     container_name: flight-monitor
     restart: unless-stopped
@@ -22,6 +22,9 @@ services:
       - PUSH_INTERVAL=${PUSH_INTERVAL:-3600}
       # 代理（可选）
       - PROXY_URL=${PROXY_URL:-}
+      # 携程 DOM 抓取：宿主机 Chrome CDP 端口（Docker 内通过 host.docker.internal 访问）
+      # 宿主机启动: google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/cdp
+      - CTRIP_CDP_PORT=${CTRIP_CDP_PORT:-host.docker.internal:9222}
       # MCP Server
       - MCP_ENABLED=${MCP_ENABLED:-true}
       - MCP_PORT=${MCP_PORT:-8081}
