@@ -49,6 +49,15 @@ def get_search_urls(trip):
     # 搜索模板 - 东京(NRT/HND) × 上海浦东(PVG)
     # SHA(虹桥)廉航覆盖率低，不纳入搜索
     templates = [
+        # ━━━ 携程: NRT/HND → PVG ━━━
+        ("携程_NRT_PVG", "outbound", "NRT-PVG",
+         "https://flights.ctrip.com/online/list/oneway-NRT-PVG?depdate={date}&cabin=y&adult=1&child=0&infant=0"),
+        ("携程_NRT_PVG", "return", "PVG-NRT",
+         "https://flights.ctrip.com/online/list/oneway-PVG-NRT?depdate={date}&cabin=y&adult=1&child=0&infant=0"),
+        ("携程_HND_PVG", "outbound", "HND-PVG",
+         "https://flights.ctrip.com/online/list/oneway-HND-PVG?depdate={date}&cabin=y&adult=1&child=0&infant=0"),
+        ("携程_HND_PVG", "return", "PVG-HND",
+         "https://flights.ctrip.com/online/list/oneway-PVG-HND?depdate={date}&cabin=y&adult=1&child=0&infant=0"),
         # ━━━ LetsFG: NRT/HND ⇄ PVG (多连接器聚合) ━━━
         ("LetsFG_NRT_PVG", "outbound", "NRT-PVG", "letsfg://search/NRT-PVG/{date}"),
         ("LetsFG_NRT_PVG", "return", "PVG-NRT", "letsfg://search/PVG-NRT/{date}"),
@@ -64,7 +73,7 @@ def get_search_urls(trip):
     for name, direction, pair, url_tpl in templates:
         dates = ob_dates if direction == "outbound" else rt_dates
         origin, destination = pair.split("-")
-        source_type = "letsfg" if "LetsFG" in name else "google"
+        source_type = "ctrip" if "携程" in name else ("letsfg" if "LetsFG" in name else "google")
         for date in dates:
             # 弹性日期加日期后缀区分
             suffix = f"({date})" if date != (trip["outbound_date"] if direction == "outbound" else trip["return_date"]) else ""
@@ -74,7 +83,7 @@ def get_search_urls(trip):
                 "direction": direction,
                 "label": f"{'去程' if direction == 'outbound' else '回程'} {from_to} {date}",
                 "url": url_tpl.format(date=date),
-                "wait": 8 if "LetsFG" in name else 10,
+                "wait": 8 if ("携程" in name or "LetsFG" in name) else 10,
                 "flight_date": date,
                 "origin": origin,
                 "destination": destination,

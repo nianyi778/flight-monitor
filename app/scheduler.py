@@ -214,6 +214,7 @@ def _load_cached_results(state, searches):
     cached = {}
     remaining = []
     source_name_map = {
+        "ctrip": "ctrip_api",
         "google": "google_api",
         "spring": "spring_api",
     }
@@ -312,10 +313,11 @@ async def _run_check_inner(force, all_trips, bot_module):
 
     log.info(f"🔍 搜索去重: {total_raw}个 → {total_unique}个（节省{saved}次抓取）")
 
-    # 3. API 瀑布调用（LetsFG → Google → 春秋官网）
+    # 3. API 瀑布调用（携程 → LetsFG → Google → 春秋官网）
     unique_searches = [v["search"] for v in url_map.values()]
 
     letsfg_searches = [s for s in unique_searches if s.get("source_type") == "letsfg"]
+    ctrip_searches = [s for s in unique_searches if s.get("source_type") == "ctrip"]
     google_searches = [s for s in unique_searches if s.get("source_type") == "google"]
 
     all_analysis = {}  # url -> analysis_result
@@ -333,6 +335,20 @@ async def _run_check_inner(force, all_trips, bot_module):
             )
             all_analysis.update(fetched)
             _record_results_for_source(state, "letsfg_api", fetched, remaining)
+
+    # — 携程 API —
+    if ctrip_searches:
+        from app.ctrip_api import get_ctrip_flights_for_searches
+
+        cached, remaining = _load_cached_results(state, ctrip_searches)
+        all_analysis.update(cached)
+        if not source_in_cooldown(state, "ctrip_api", now_jst()) and remaining:
+            proxy = choose_proxy(state, "ctrip_api", now_jst())
+            fetched = get_ctrip_flights_for_searches(
+                remaining, proxy_url=proxy.get("url"), proxy_id=proxy.get("id")
+            )
+            all_analysis.update(fetched)
+            _record_results_for_source(state, "ctrip_api", fetched, remaining)
 
     # — Google Flights API —
     if google_searches:
@@ -431,7 +447,7 @@ async def _run_check_inner(force, all_trips, bot_module):
             combos = find_best_combinations(results, trip)
             save_to_db(results, combos, trip)
 
-            # 如果春秋官网比 LetsFG/Google 更便宜，插入到 combos 最前面
+            # 如果春秋官网比携程/LetsFG/Google 更便宜，插入到 combos 最前面
             if spring_best and spring_best.get("total_cny"):
                 ota_best = combos[0]["total"] if combos else 99999
                 if spring_best["total_cny"] < ota_best:

@@ -56,6 +56,9 @@ services:
       - LETSFG_API_KEY=${LETSFG_API_KEY:-}
       - LETSFG_MODE=${LETSFG_MODE:-auto}
       - LETSFG_TIMEOUT=${LETSFG_TIMEOUT:-90}
+      # 携程抓取：优先 API，失败时通过同 compose 内的可视化 Chromium 做 DOM fallback
+      - CTRIP_CDP_PORT=chrome:9223
+      - CTRIP_ENABLE_BROWSER_FALLBACK=1
       # MCP Server
       - MCP_ENABLED=${MCP_ENABLED:-true}
       - MCP_PORT=${MCP_PORT:-8081}
