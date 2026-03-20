@@ -8,11 +8,19 @@ import signal
 
 from app.anti_bot import finalize_result_status, make_result
 from app.config import (
-    TG_BOT_TOKEN, CHECK_INTERVAL, PUSH_INTERVAL,
-    DATA_DIR, now_jst, log, load_state, save_state,
+    TG_BOT_TOKEN,
+    CHECK_INTERVAL,
+    PUSH_INTERVAL,
+    DATA_DIR,
+    now_jst,
+    log,
+    load_state,
+    save_state,
 )
 from app.db import (
-    get_active_trips, update_trip_best_price, save_to_db,
+    get_active_trips,
+    update_trip_best_price,
+    save_to_db,
     already_checked_this_hour,
 )
 from app.matcher import find_best_combinations, get_search_urls
@@ -80,13 +88,14 @@ async def push_until_ack(msg):
 def _get_check_interval_for_trip(trip):
     """根据出发倒计时决定检查频率（秒）"""
     from datetime import datetime
+
     try:
         ob_date = datetime.strptime(trip["outbound_date"], "%Y-%m-%d").date()
         days = (ob_date - now_jst().date()).days
         if days <= 0:
             return None  # 已过期
         elif days <= 30:
-            return 3600      # <30天：每小时
+            return 3600  # <30天：每小时
         elif days <= 90:
             return 3600 * 3  # 30-90天：每3小时
         else:
@@ -107,6 +116,7 @@ def _trip_should_check(trip, state):
         return True
 
     from datetime import datetime
+
     try:
         last_dt = datetime.fromisoformat(last_check)
         elapsed = (now_jst() - last_dt).total_seconds()
@@ -167,22 +177,35 @@ def _record_results_for_source(state, source_name, results, searches):
                 seconds=diagnosis.get("retry_after_seconds") or None,
             )
         elif action == "switch_proxy":
-            penalize_proxy(state, result.get("proxy_id"), source_name, now_dt, hard=True)
+            penalize_proxy(
+                state, result.get("proxy_id"), source_name, now_dt, hard=True
+            )
         elif action == "skip_browser" and source_name == "browser_fallback":
-            mark_skip_browser_until(state, now_dt, diagnosis.get("retry_after_seconds") or 1800)
+            mark_skip_browser_until(
+                state, now_dt, diagnosis.get("retry_after_seconds") or 1800
+            )
         elif action == "raise_alert":
-            state.setdefault("runtime_alerts", []).append({
-                "source": source_name,
-                "reason": diagnosis.get("reason") or result.get("error"),
-                "time": now_dt.isoformat(),
-            })
+            state.setdefault("runtime_alerts", []).append(
+                {
+                    "source": source_name,
+                    "reason": diagnosis.get("reason") or result.get("error"),
+                    "time": now_dt.isoformat(),
+                }
+            )
             state["runtime_alerts"] = state["runtime_alerts"][-20:]
         record_proxy_outcome(state, result.get("proxy_id"), source_name, status, now_dt)
 
     if saw_ok:
         record_source_outcome(state, source_name, "ok", None, now_dt)
     elif saw_bad:
-        status = next((r.get("status") for r in results.values() if r.get("status") in {"blocked", "degraded"}), "degraded")
+        status = next(
+            (
+                r.get("status")
+                for r in results.values()
+                if r.get("status") in {"blocked", "degraded"}
+            ),
+            "degraded",
+        )
         record_source_outcome(state, source_name, status, last_reason, now_dt)
 
 
@@ -191,14 +214,15 @@ def _load_cached_results(state, searches):
     cached = {}
     remaining = []
     source_name_map = {
-        "ctrip": "ctrip_api",
         "google": "google_api",
         "spring": "spring_api",
     }
     for search in searches:
         hit = get_cached_search_result(state, search, now_dt)
         if hit:
-            hit["source_runtime"] = source_name_map.get(search.get("source_type"), hit.get("source_runtime", "unknown"))
+            hit["source_runtime"] = source_name_map.get(
+                search.get("source_type"), hit.get("source_runtime", "unknown")
+            )
             cached[search["url"]] = hit
         else:
             remaining.append(search)
@@ -270,7 +294,9 @@ async def _run_check_inner(force, all_trips, bot_module):
         return
 
     if skipped > 0:
-        log.info(f"📋 本轮检查 {len(due_trips)}/{len(all_trips)} 个行程（{skipped}个未到频率）")
+        log.info(
+            f"📋 本轮检查 {len(due_trips)}/{len(all_trips)} 个行程（{skipped}个未到频率）"
+        )
 
     # 2. 收集去重后的搜索URL
     url_map, trip_search_map = _collect_unique_searches(due_trips)
@@ -286,33 +312,39 @@ async def _run_check_inner(force, all_trips, bot_module):
 
     log.info(f"🔍 搜索去重: {total_raw}个 → {total_unique}个（节省{saved}次抓取）")
 
-    # 3. API 瀑布调用（携程 → Google → Amadeus → 可选截图兜底）
+    # 3. API 瀑布调用（LetsFG → Google → 春秋官网）
     unique_searches = [v["search"] for v in url_map.values()]
 
-    ctrip_searches = [s for s in unique_searches if s.get("source_type") == "ctrip"]
+    letsfg_searches = [s for s in unique_searches if s.get("source_type") == "letsfg"]
     google_searches = [s for s in unique_searches if s.get("source_type") == "google"]
 
     all_analysis = {}  # url -> analysis_result
 
-    # — 携程 API —
-    if ctrip_searches:
-        from app.ctrip_api import get_ctrip_flights_for_searches
-        cached, remaining = _load_cached_results(state, ctrip_searches)
+    # — LetsFG CLI / SDK —
+    if letsfg_searches:
+        from app.letsfg_api import get_letsfg_flights_for_searches
+
+        cached, remaining = _load_cached_results(state, letsfg_searches)
         all_analysis.update(cached)
-        if not source_in_cooldown(state, "ctrip_api", now_jst()) and remaining:
-            proxy = choose_proxy(state, "ctrip_api", now_jst())
-            fetched = get_ctrip_flights_for_searches(remaining, proxy_url=proxy.get("url"), proxy_id=proxy.get("id"))
+        if not source_in_cooldown(state, "letsfg_api", now_jst()) and remaining:
+            proxy = choose_proxy(state, "letsfg_api", now_jst())
+            fetched = get_letsfg_flights_for_searches(
+                remaining, proxy_url=proxy.get("url"), proxy_id=proxy.get("id")
+            )
             all_analysis.update(fetched)
-            _record_results_for_source(state, "ctrip_api", fetched, remaining)
+            _record_results_for_source(state, "letsfg_api", fetched, remaining)
 
     # — Google Flights API —
     if google_searches:
         from app.google_flights_api import get_google_flights_for_searches
+
         cached, remaining = _load_cached_results(state, google_searches)
         all_analysis.update(cached)
         if not source_in_cooldown(state, "google_api", now_jst()) and remaining:
             proxy = choose_proxy(state, "google_api", now_jst())
-            fetched = get_google_flights_for_searches(remaining, proxy_url=proxy.get("url"), proxy_id=proxy.get("id"))
+            fetched = get_google_flights_for_searches(
+                remaining, proxy_url=proxy.get("url"), proxy_id=proxy.get("id")
+            )
             all_analysis.update(fetched)
             _record_results_for_source(state, "google_api", fetched, remaining)
 
@@ -322,7 +354,13 @@ async def _run_check_inner(force, all_trips, bot_module):
     for url, a in all_analysis.items():
         record_check_metric_event(
             check_metrics,
-            a.get("source_runtime", a.get("source_type") or a.get("request_mode") or a.get("source") or "unknown"),
+            a.get(
+                "source_runtime",
+                a.get("source_type")
+                or a.get("request_mode")
+                or a.get("source")
+                or "unknown",
+            ),
             from_cache=bool(a.get("from_cache")),
             status=a.get("status", "no_data"),
             has_flights=bool(a.get("flights")),
@@ -332,9 +370,13 @@ async def _run_check_inner(force, all_trips, bot_module):
         if a.get("error") and not a.get("flights"):
             log.warning(f"  ⚠️ {a['error']}")
             if a.get("diagnosis"):
-                log.warning(f"  🤖 诊断: {a['diagnosis'].get('action')} / {a['diagnosis'].get('reason')}")
+                log.warning(
+                    f"  🤖 诊断: {a['diagnosis'].get('action')} / {a['diagnosis'].get('reason')}"
+                )
         elif a.get("flights"):
-            log.info(f"  ✓ {a.get('source','')} {len(a['flights'])} 个航班, 最低 ¥{a.get('lowest_price', '?')}")
+            log.info(
+                f"  ✓ {a.get('source', '')} {len(a['flights'])} 个航班, 最低 ¥{a.get('lowest_price', '?')}"
+            )
 
     if state.get("runtime_alerts"):
         latest = state["runtime_alerts"][-1]
@@ -342,7 +384,9 @@ async def _run_check_inner(force, all_trips, bot_module):
     check_metrics["alerts"] = len(state.get("runtime_alerts", []))
 
     # 5. 分发结果到各行程
-    brief_lines = [f"🕐 *{now_jst().strftime('%H:%M')} 巡查报告* (第{check_count}次 | {len(due_trips)}个行程 {total_unique}次抓取)\n"]
+    brief_lines = [
+        f"🕐 *{now_jst().strftime('%H:%M')} 巡查报告* (第{check_count}次 | {len(due_trips)}个行程 {total_unique}次抓取)\n"
+    ]
 
     for trip in due_trips:
         try:
@@ -351,50 +395,76 @@ async def _run_check_inner(force, all_trips, bot_module):
             for url in trip_search_map.get(trip["id"], []):
                 if url in all_analysis:
                     a = all_analysis[url]
-                    direction = "outbound" if any(
-                        s["url"] == url and s["direction"] == "outbound"
-                        for s in get_search_urls(trip)
-                    ) else "return"
+                    direction = (
+                        "outbound"
+                        if any(
+                            s["url"] == url and s["direction"] == "outbound"
+                            for s in get_search_urls(trip)
+                        )
+                        else "return"
+                    )
                     results[direction].append(a)
 
             # 春秋官网直销价（零成本、100%准确）
             from app.spring_api import get_spring_price_for_trip
+
             spring_proxy = choose_proxy(state, "spring_api", now_jst())
-            spring = get_spring_price_for_trip(trip, proxy_url=spring_proxy.get("url"), proxy_id=spring_proxy.get("id"))
-            record_source_outcome(state, "spring_api", spring.get("status", "no_data"), spring.get("block_reason"), now_jst())
-            record_proxy_outcome(state, spring.get("proxy_id"), "spring_api", spring.get("status", "no_data"), now_jst())
+            spring = get_spring_price_for_trip(
+                trip, proxy_url=spring_proxy.get("url"), proxy_id=spring_proxy.get("id")
+            )
+            record_source_outcome(
+                state,
+                "spring_api",
+                spring.get("status", "no_data"),
+                spring.get("block_reason"),
+                now_jst(),
+            )
+            record_proxy_outcome(
+                state,
+                spring.get("proxy_id"),
+                "spring_api",
+                spring.get("status", "no_data"),
+                now_jst(),
+            )
             spring_best = spring.get("best_combo")
 
             combos = find_best_combinations(results, trip)
             save_to_db(results, combos, trip)
 
-            # 如果春秋官网比携程/Google更便宜，插入到 combos 最前面
+            # 如果春秋官网比 LetsFG/Google 更便宜，插入到 combos 最前面
             if spring_best and spring_best.get("total_cny"):
                 ota_best = combos[0]["total"] if combos else 99999
                 if spring_best["total_cny"] < ota_best:
-                    log.info(f"  🌸 春秋官网更便宜: ¥{spring_best['total_cny']} vs OTA ¥{ota_best}")
-                    combos.insert(0, {
-                        "outbound": {
-                            "airline": "春秋航空(官网直销)",
-                            "departure_time": "", "arrival_time": "",
-                            "price_cny": spring_best["outbound_cny"],
-                            "original_currency": "USD",
-                            "_source": "春秋官网",
-                            "_url": f"https://en.ch.com/{spring_best['outbound_route'].replace('→', '-')}/?date={spring_best['outbound_date']}",
-                            "_flight_date": spring_best["outbound_date"],
+                    log.info(
+                        f"  🌸 春秋官网更便宜: ¥{spring_best['total_cny']} vs OTA ¥{ota_best}"
+                    )
+                    combos.insert(
+                        0,
+                        {
+                            "outbound": {
+                                "airline": "春秋航空(官网直销)",
+                                "departure_time": "",
+                                "arrival_time": "",
+                                "price_cny": spring_best["outbound_cny"],
+                                "original_currency": "USD",
+                                "_source": "春秋官网",
+                                "_url": f"https://www.ch.com/{spring_best['outbound_route'].replace('→', '-')}/?date={spring_best['outbound_date']}",
+                                "_flight_date": spring_best["outbound_date"],
+                            },
+                            "return": {
+                                "airline": "春秋航空(官网直销)",
+                                "departure_time": "",
+                                "arrival_time": "",
+                                "price_cny": spring_best["return_cny"],
+                                "original_currency": "USD",
+                                "_source": "春秋官网",
+                                "_url": f"https://www.ch.com/{spring_best['return_route'].replace('→', '-')}/?date={spring_best['return_date']}",
+                                "_flight_date": spring_best["return_date"],
+                            },
+                            "total": spring_best["total_cny"],
+                            "within_budget": spring_best["total_cny"] <= trip["budget"],
                         },
-                        "return": {
-                            "airline": "春秋航空(官网直销)",
-                            "departure_time": "", "arrival_time": "",
-                            "price_cny": spring_best["return_cny"],
-                            "original_currency": "USD",
-                            "_source": "春秋官网",
-                            "_url": f"https://en.ch.com/{spring_best['return_route'].replace('→', '-')}/?date={spring_best['return_date']}",
-                            "_flight_date": spring_best["return_date"],
-                        },
-                        "total": spring_best["total_cny"],
-                        "within_budget": spring_best["total_cny"] <= trip["budget"],
-                    })
+                    )
 
             # 更新检查时间
             state[f"trip_{trip['id']}_last_check"] = now_jst().isoformat()
@@ -434,13 +504,31 @@ async def _run_check_inner(force, all_trips, bot_module):
                 best_ob = combos[0]["outbound"] if combos else {}
                 best_rt = combos[0]["return"] if combos else {}
 
-                ob_date_tag = f" [{best_ob.get('_flight_date', '')}]" if best_ob.get('_flight_date') and best_ob.get('_flight_date') != trip['outbound_date'] else ""
-                rt_date_tag = f" [{best_rt.get('_flight_date', '')}]" if best_rt.get('_flight_date') and best_rt.get('_flight_date') != trip['return_date'] else ""
-                ob_info = f"{best_ob.get('airline', '?')} {best_ob.get('departure_time', '')}→{best_ob.get('arrival_time', '')} {_brief_price(best_ob)} ({best_ob.get('_source', '')}){ob_date_tag}" if best_ob else "无数据"
-                rt_info = f"{best_rt.get('airline', '?')} {best_rt.get('departure_time', '')}→{best_rt.get('arrival_time', '')} {_brief_price(best_rt)} ({best_rt.get('_source', '')}){rt_date_tag}" if best_rt else "无数据"
+                ob_date_tag = (
+                    f" [{best_ob.get('_flight_date', '')}]"
+                    if best_ob.get("_flight_date")
+                    and best_ob.get("_flight_date") != trip["outbound_date"]
+                    else ""
+                )
+                rt_date_tag = (
+                    f" [{best_rt.get('_flight_date', '')}]"
+                    if best_rt.get("_flight_date")
+                    and best_rt.get("_flight_date") != trip["return_date"]
+                    else ""
+                )
+                ob_info = (
+                    f"{best_ob.get('airline', '?')} {best_ob.get('departure_time', '')}→{best_ob.get('arrival_time', '')} {_brief_price(best_ob)} ({best_ob.get('_source', '')}){ob_date_tag}"
+                    if best_ob
+                    else "无数据"
+                )
+                rt_info = (
+                    f"{best_rt.get('airline', '?')} {best_rt.get('departure_time', '')}→{best_rt.get('arrival_time', '')} {_brief_price(best_rt)} ({best_rt.get('_source', '')}){rt_date_tag}"
+                    if best_rt
+                    else "无数据"
+                )
 
                 interval = _get_check_interval_for_trip(trip)
-                freq = f"{interval//3600}h" if interval else "?"
+                freq = f"{interval // 3600}h" if interval else "?"
 
                 brief_lines.append(
                     f"✈️ *#{trip['id']}* {trip['outbound_date']}→{trip['return_date']} (¥{budget} 频率{freq})\n"
@@ -504,7 +592,7 @@ async def main():
     tg_send(
         f"🟢 *机票监控系统已上线* (第{boot_count}次启动)\n\n"
         f"📊 监控行程: {len(get_active_trips())} 个\n"
-        f"⏰ 约每 {CHECK_INTERVAL//60} 分钟巡查（随机抖动防检测）\n\n"
+        f"⏰ 约每 {CHECK_INTERVAL // 60} 分钟巡查（随机抖动防检测）\n\n"
         f"💡 可用命令:\n"
         f"/check - 立即查价\n"
         f"/status - 系统状态\n"
@@ -539,8 +627,10 @@ async def main():
         log.info(f"⏰ 下次检查: {wait_time}s 后 (随机抖动)")
         force_check_event.clear()
         done, pending = await asyncio.wait(
-            [asyncio.create_task(shutdown_event.wait()),
-             asyncio.create_task(force_check_event.wait())],
+            [
+                asyncio.create_task(shutdown_event.wait()),
+                asyncio.create_task(force_check_event.wait()),
+            ],
             timeout=wait_time,
             return_when=asyncio.FIRST_COMPLETED,
         )

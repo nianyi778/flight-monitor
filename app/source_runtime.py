@@ -14,7 +14,7 @@ from app.config import (
     SOURCE_COOLDOWN_SECONDS,
     SOURCE_MAX_CONSECUTIVE_FAILURES,
 )
-_SOURCE_NAMES = ("spring_api", "ctrip_api", "google_api")
+_SOURCE_NAMES = ("spring_api", "letsfg_api", "google_api")
 
 
 def ensure_runtime_state(state: dict) -> dict:
@@ -177,6 +177,8 @@ def get_cached_search_result(state: dict, search: dict, now_dt: datetime) -> dic
 
 
 def store_cached_search_result(state: dict, search: dict, result: dict, now_dt: datetime) -> None:
+    if result.get("no_cache"):
+        return  # 库不可用等瞬时错误不缓存，下次重试
     ensure_runtime_state(state)
     ttl = _cache_ttl_seconds(search, result.get("status", "no_data"))
     cache_result = dict(result)

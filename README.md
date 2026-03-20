@@ -6,47 +6,38 @@
 
 ```
 app/
-├── config.py           # 配置 & 常量 & 时区(JST)
-├── db.py               # TiDB 数据层
-├── ctrip_api.py        # 携程 browser DOM 抓取
+├── config.py             # 配置 & 常量 & 时区(JST)
+├── db.py                 # TiDB 数据层
+├── letsfg_api.py         # LetsFG CLI/SDK 聚合搜索
 ├── google_flights_api.py # Google Flights fast-flights protobuf
-├── spring_api.py       # 春秋航空官网 API 直连
-├── matcher.py          # 弹性日期搜索 + 航班组合匹配
-├── notifier.py         # Telegram 通知 & 消息格式化
-├── bot.py              # TG Bot 交互（Inline Keyboard）
-├── mcp_server.py       # MCP Server（供其他 AI Agent 调用）
-└── scheduler.py        # 智能调度（去重 + 分频）
+├── spring_api.py         # 春秋航空官网 API 直连
+├── matcher.py            # 弹性日期搜索 + 航班组合匹配
+├── notifier.py           # Telegram 通知 & 消息格式化
+├── bot.py                # TG Bot 交互（Inline Keyboard）
+├── mcp_server.py         # MCP Server（供其他 AI Agent 调用）
+└── scheduler.py          # 智能调度（去重 + 分频）
 ```
 
 ## 功能
 
 ### 数据源
 
-| 数据源 | 方式 | 成本 | 准确率 | 覆盖 |
-|--------|------|------|--------|------|
-| 春秋航空官网 | REST API 直连 | 零 | 100% | 春秋(9C/IJ) 直销价 |
-| 携程 | browser DOM 抓取（agent-browser + window state JSON） | 零 | ~95% | 全航司 OTA 价 |
-| Google Flights | fast-flights protobuf 逆向，纯 HTTP | 零 | ~95% | 全航司日本站价 |
+| 数据源 | 方式 | 成本 | 覆盖 |
+|--------|------|------|------|
+| 春秋航空官网 | REST API 直连 | 零 | 春秋(9C/IJ) 直销价 |
+| LetsFG | CLI/SDK（100+ connectors + 可选 GDS/NDC） | 免费 | 多航司聚合价 |
+| Google Flights | fast-flights protobuf 逆向，纯 HTTP | 零 | 全航司日本站价 |
 
 ### 机场覆盖
 
-|  | PVG(浦东) | SHA(虹桥) |
-|--|-----------|-----------|
-| NRT(成田) | 携程 + 春秋 + Google | 携程 + 春秋 |
-| HND(羽田) | 携程 + 春秋 + Google | 携程 + 春秋 |
+|  | PVG(浦东) |
+|--|-----------|
+| NRT(成田) | LetsFG + Google + 春秋 |
+| HND(羽田) | LetsFG + Google + 春秋 |
 
 ### 航司覆盖
 
 春秋(9C/IJ)、捷星(GK)、乐桃(MM)、东航(MU)、上航(FM)、国航(CA)、南航(CZ)、吉祥(HO)、ANA(NH)、JAL(JL)
-
-### 携程抓取策略
-
-DOM 模式（唯一路径），按可靠性依次尝试：
-1. `window.__NEXT_DATA__` / `window.__INITIAL_STATE__` — SSR 注入的全量 JSON，最全
-2. DOM 多套选择器 — `[class*="FlightItem"]` 等
-3. 全文 innerText 正则兜底
-
-失败时直接标记 `blocked`，由调度器告警。
 
 ### 智能调度
 
@@ -54,6 +45,7 @@ DOM 模式（唯一路径），按可靠性依次尝试：
 - **分频检查**：<30天每小时 / 30-90天每3小时 / >90天每6小时
 - **弹性日期**：自动搜索目标日期 ±N 天，找最便宜的组合
 - **源健康管理**：连续失败自动冷却，恢复后自动重启
+- **时间窗过滤**：去程/回程各设时间窗，无时间信息的航班直接收录不丢弃
 
 ### TG Bot 交互
 
@@ -86,21 +78,37 @@ SSE 连接地址：`http://<host>:8081/sse`
 
 详见 [DEPLOYMENT.md](./DEPLOYMENT.md)，包含从零开始的操作指南、环境变量说明、建表 SQL、Docker Compose 完整示例及常用 SQL 查询。
 
-携程 DOM 抓取需要 agent-browser：
 ```bash
-# Docker 内通过 CDP 连接宿主机 Chrome
-CTRIP_CDP_PORT=host.docker.internal:9222
+# VPS 拉取新镜像并重启
+docker compose pull && docker compose up -d --force-recreate flight-monitor
+
+# 本地构建（多架构推送）
+docker buildx build --platform linux/amd64,linux/arm64 \
+  --output type=image,name=ghcr.io/nianyi778/flight-monitor:v5.0,push=true \
+  --network host .
 ```
+
+## LetsFG
+
+可选增强源。在 Docker 镜像内已内置 `letsfg`、`playwright` 和 Chromium，本地 connectors 可直接运行。
+
+环境变量：
+```bash
+LETSFG_API_KEY=trav_xxx   # 可选；有值则优先走 letsfg search（云端）
+LETSFG_MODE=auto          # auto/local/cloud
+LETSFG_TIMEOUT=90
+```
+
+如配置 `LETSFG_API_KEY`，优先走 `letsfg search`；否则默认走 `letsfg search-local`。
 
 ## 版本历史
 
 | 版本 | 主要更新 |
 |------|---------|
-| v4.3 | 移除截图+LLM兜底（scraper/analyzer），携程切换纯 DOM 抓取；Google 适配 fast-flights v2.2 新接口 |
-| v4.2 | 携程降级链重构：删除 batchSearch/browserFetch/LowestPriceV2，仅保留 browser DOM scrape |
-| v4.1 | 携程新增 browser DOM scrape 降级路径；agent-browser 支持 CDP 模式；Docker /bin/sh 兼容 |
-| v3.15 | 修复春秋API 405：阿里云WAF需要 acw_tc cookie |
-| v3.13 | 抓取提速：携程+Google并行双context，等待价格元素替代固定sleep |
+| v5.0 | 移除携程数据源（接口下线）；修复 LetsFG 无时间信息航班被过滤导致"无数据"；Google Flights import 错误不再缓存；移除镜像中 agent-browser 和 COPY data/；fast-flights 固定 <3.0 |
+| v4.9 | LetsFG 多 connector 聚合；源健康管理优化 |
+| v4.3 | 移除截图+LLM兜底；Google 适配 fast-flights v2.2 新接口 |
+| v4.2 | 携程降级链重构 |
 | v3.9 | 新增 GET /health HTTP 端点 |
 | v3.5 | 春秋航空官网 API 直连 |
 | v3.2 | 智能调度：日期去重 + 分频检查 |

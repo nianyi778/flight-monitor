@@ -1,5 +1,5 @@
 curl_cffi>=0.7.0
-fast-flights>=2.2
+fast-flights>=2.2,<3.0
 requests>=2.31.0
 pymysql>=1.1.0
 fastmcp>=2.0.0

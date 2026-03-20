@@ -1,0 +1,15 @@
+data/
+tests/
+scripts/
+.git/
+.github/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.log
+capture_*.sh
+test_*.py
+README.md
+DEPLOYMENT.md

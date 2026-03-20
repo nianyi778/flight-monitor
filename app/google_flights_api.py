@@ -65,7 +65,7 @@ def _query_fast_flights(origin, destination, date_str):
     返回 (Result | None, Exception | None)
     """
     try:
-        from fast_flights import FlightData, Passengers, get_flights
+        from fast_flights import FlightData, Passengers, get_flights  # type: ignore[import]
         result = get_flights(
             flight_data=[FlightData(date=date_str, from_airport=origin, to_airport=destination)],
             trip="one-way",
@@ -143,16 +143,19 @@ def get_google_flights_for_searches(searches, proxy_url=None, proxy_id=None):
 
     try:
         import fast_flights  # noqa: F401
-    except ImportError:
-        log.warning("  ⚠️ fast-flights 未安装，跳过 Google Flights API")
+        # 检查 v2.x API 是否可用
+        from fast_flights import FlightData, Passengers, get_flights  # noqa: F401
+    except ImportError as _ie:
+        log.warning(f"  ⚠️ fast-flights 库不可用: {_ie}（跳过 Google Flights，不缓存）")
         return {s["url"]: {
             "flights": [], "lowest_price": None,
-            "error": "fast-flights 未安装",
+            "error": f"fast-flights 不可用: {_ie}",
             "source": "GoogleAPI", "url": s["url"],
             "flight_date": s.get("flight_date", ""),
             "status": "degraded",
             "block_reason": None,
             "retryable": True,
+            "no_cache": True,  # 库错误不缓存，下次重试
             "request_mode": "api",
             "proxy_id": proxy_id,
         } for s in searches}
