@@ -181,7 +181,7 @@ curl http://localhost:8081/health
 ```yaml
 services:
   flight-monitor:
-    image: ghcr.io/nianyi778/flight-monitor:v3.15
+    image: ghcr.io/nianyi778/flight-monitor:v4.9
     restart: unless-stopped
     ports:
       - "8081:8081"

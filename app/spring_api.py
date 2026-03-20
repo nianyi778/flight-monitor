@@ -9,9 +9,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     from curl_cffi import requests as requests
-    _IMPERSONATE = {"impersonate": "chrome"}
+
+    _IMPERSONATE = {"impersonate": "chrome131"}
 except ImportError:
     import requests  # type: ignore
+
     _IMPERSONATE = {}
 
 from app.anti_bot import classify_exception
@@ -19,19 +21,21 @@ from app.config import now_jst, log
 
 _HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0 Safari/537.36",
-    "Referer": "https://en.ch.com/",
+    "Referer": "https://www.ch.com/",
     "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
     "X-Requested-With": "XMLHttpRequest",
 }
 
-_API_URL = "https://en.ch.com/Flights/MinPriceTrends"
+# 使用中文站（en.ch.com 在海外 IP 下被 WAF 封禁 405）
+_API_URL = "https://www.ch.com/Flights/MinPriceTrends"
+_WARMUP_URL = "https://www.ch.com/"
 
-# 机场名映射（春秋 API 用英文全名）
+# 机场名映射（中文站 API 用中文全名）
 _AIRPORT_NAMES = {
-    "NRT": "Tokyo(Narita)",
-    "HND": "Tokyo(Haneda)",
-    "PVG": "Shanghaipudong",
-    "SHA": "Shanghaihongqiao",
+    "NRT": "东京(成田)",
+    "HND": "东京(羽田)",
+    "PVG": "上海浦东",
+    "SHA": "上海虹桥",
 }
 
 # USD/JPY → CNY 汇率（启动时为默认值，每日从免费API刷新）
@@ -44,6 +48,7 @@ _rate_cache = {"date": None, "usd_cny": USD_TO_CNY, "jpy_cny": JPY_TO_CNY}
 def get_exchange_rates():
     """返回最新汇率 (usd_cny, jpy_cny)。每日从 Frankfurter API 刷新一次，失败时沿用上次缓存值。"""
     from datetime import date
+
     today = date.today()
     if _rate_cache["date"] == today:
         return _rate_cache["usd_cny"], _rate_cache["jpy_cny"]
@@ -90,7 +95,7 @@ def fetch_spring_prices(origin, destination, year_month, session=None):
     arr_name = _AIRPORT_NAMES.get(destination, destination)
 
     data = {
-        "Currency": "1",
+        "Currency": "0",  # 中文站返回 CNY
         "DepartureDate": dep_date,
         "Departure": dep_name,
         "Arrival": arr_name,
@@ -105,31 +110,48 @@ def fetch_spring_prices(origin, destination, year_month, session=None):
 
     requester = session or requests
     try:
-        resp = requester.post(_API_URL, headers=_HEADERS, data=data, timeout=15,
-                              **_IMPERSONATE)
+        resp = requester.post(
+            _API_URL, headers=_HEADERS, data=data, timeout=15, **_IMPERSONATE
+        )
+        # 405 通常是 WAF Cookie 失效，如果有 session 则重新 warmup 再试一次
+        if resp.status_code == 405 and session is not None:
+            log.warning(f"  🌸 春秋API 405，重新warmup后重试 {origin}→{destination}")
+            try:
+                session.get(_WARMUP_URL, headers=_HEADERS, timeout=10, **_IMPERSONATE)
+            except Exception:
+                pass
+            resp = session.post(
+                _API_URL, headers=_HEADERS, data=data, timeout=15, **_IMPERSONATE
+            )
         resp.raise_for_status()
         result = resp.json()
 
-        usd_cny, _ = get_exchange_rates()
         trends = result.get("PriceTrends") or []
         prices = {}
         for t in trends:
             date = t.get("Date", "")
-            price_usd = t.get("Price")
-            if date and price_usd and price_usd > 0:
+            price_cny = t.get("Price")
+            if date and price_cny and price_cny > 0:
                 prices[date] = {
-                    "price_usd": round(price_usd, 2),
-                    "price_cny": round(price_usd * usd_cny),
+                    "price_usd": None,  # 中文站直接返回 CNY
+                    "price_cny": int(price_cny),
                     "day_of_week": t.get("DayOfWeek", ""),
                 }
 
-        log.info(f"  🌸 春秋API {origin}→{destination} {year_month}: {len(prices)} 天有价格")
+        log.info(
+            f"  🌸 春秋API {origin}→{destination} {year_month}: {len(prices)} 天有价格"
+        )
         return prices, {"status": "ok", "block_reason": None, "retryable": True}
 
     except Exception as e:
         log.error(f"  🌸 春秋API失败 {origin}→{destination}: {e}")
         status, reason, retryable = classify_exception(e)
-        return {}, {"status": status, "block_reason": reason, "retryable": retryable, "error": str(e)}
+        return {}, {
+            "status": status,
+            "block_reason": reason,
+            "retryable": retryable,
+            "error": str(e),
+        }
 
 
 def get_spring_price_for_trip(trip, proxy_url=None, proxy_id=None):
@@ -146,16 +168,19 @@ def get_spring_price_for_trip(trip, proxy_url=None, proxy_id=None):
         }
     """
     ob_date = trip["outbound_date"]  # "2026-09-18"
-    rt_date = trip["return_date"]    # "2026-09-27"
-    ob_month = ob_date[:7]           # "2026-09"
+    rt_date = trip["return_date"]  # "2026-09-27"
+    ob_month = ob_date[:7]  # "2026-09"
     rt_month = rt_date[:7]
 
     ob_flex = trip.get("outbound_flex", 0)
     rt_flex = trip.get("return_flex", 1)
 
     result = {
-        "outbound": None, "return": None, "total_cny": None,
-        "outbound_flex": {}, "return_flex": {},
+        "outbound": None,
+        "return": None,
+        "total_cny": None,
+        "outbound_flex": {},
+        "return_flex": {},
         "source": "春秋官网",
         "status": "no_data",
         "block_reason": None,
@@ -178,24 +203,34 @@ def get_spring_price_for_trip(trip, proxy_url=None, proxy_id=None):
     session = requests.Session()
     if proxy_url:
         session.proxies = {"http": proxy_url, "https": proxy_url}
-    try:
-        session.get("https://en.ch.com/", headers=_HEADERS, timeout=10, **_IMPERSONATE)
-    except Exception:
-        pass  # warm-up 失败不影响主流程
+
+    def _do_warmup():
+        try:
+            r = session.get(_WARMUP_URL, headers=_HEADERS, timeout=10, **_IMPERSONATE)
+            if r.status_code != 200:
+                log.warning(f"  🌸 春秋warmup返回 {r.status_code}，WAF cookie可能无效")
+                return False
+            return True
+        except Exception as e:
+            log.warning(f"  🌸 春秋warmup失败: {e}")
+            return False
+
+    _do_warmup()
 
     # 并行请求所有路线（8次串行 → 8并发，最坏耗时从120s降至15s）
-    route_tasks = (
-        [(o, d, ob_month, "ob") for o, d in ob_routes] +
-        [(o, d, rt_month, "rt") for o, d in rt_routes]
-    )
+    route_tasks = [(o, d, ob_month, "ob") for o, d in ob_routes] + [
+        (o, d, rt_month, "rt") for o, d in rt_routes
+    ]
 
     def _fetch(origin, dest, month, direction):
         prices, meta = fetch_spring_prices(origin, dest, month, session)
         return origin, dest, month, direction, prices, meta
 
     with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = {executor.submit(_fetch, o, d, m, dir_): (o, d, dir_)
-                   for o, d, m, dir_ in route_tasks}
+        futures = {
+            executor.submit(_fetch, o, d, m, dir_): (o, d, dir_)
+            for o, d, m, dir_ in route_tasks
+        }
         for future in as_completed(futures):
             try:
                 origin, dest, month, direction, prices, meta = future.result()
@@ -214,29 +249,51 @@ def get_spring_price_for_trip(trip, proxy_url=None, proxy_id=None):
                 if ob_date in prices:
                     key = (ob_date, origin, dest)
                     all_ob[key] = prices[ob_date]["price_cny"]
-                    if result["outbound"] is None or prices[ob_date]["price_cny"] < result["outbound"].get("price_cny", 99999):
-                        result["outbound"] = {"date": ob_date, "route": f"{origin}→{dest}", **prices[ob_date]}
+                    if result["outbound"] is None or prices[ob_date][
+                        "price_cny"
+                    ] < result["outbound"].get("price_cny", 99999):
+                        result["outbound"] = {
+                            "date": ob_date,
+                            "route": f"{origin}→{dest}",
+                            **prices[ob_date],
+                        }
                 for i in range(1, ob_flex + 1):
-                    flex_date = str((datetime.strptime(ob_date, "%Y-%m-%d") - timedelta(days=i)).date())
+                    flex_date = str(
+                        (
+                            datetime.strptime(ob_date, "%Y-%m-%d") - timedelta(days=i)
+                        ).date()
+                    )
                     if flex_date in prices:
                         key = (flex_date, origin, dest)
                         all_ob[key] = prices[flex_date]["price_cny"]
                         result["outbound_flex"][f"{flex_date}_{origin}_{dest}"] = {
-                            "route": f"{origin}→{dest}", **prices[flex_date]
+                            "route": f"{origin}→{dest}",
+                            **prices[flex_date],
                         }
             else:
                 if rt_date in prices:
                     key = (rt_date, origin, dest)
                     all_rt[key] = prices[rt_date]["price_cny"]
-                    if result["return"] is None or prices[rt_date]["price_cny"] < result["return"].get("price_cny", 99999):
-                        result["return"] = {"date": rt_date, "route": f"{origin}→{dest}", **prices[rt_date]}
+                    if result["return"] is None or prices[rt_date][
+                        "price_cny"
+                    ] < result["return"].get("price_cny", 99999):
+                        result["return"] = {
+                            "date": rt_date,
+                            "route": f"{origin}→{dest}",
+                            **prices[rt_date],
+                        }
                 for i in range(1, rt_flex + 1):
-                    flex_date = str((datetime.strptime(rt_date, "%Y-%m-%d") - timedelta(days=i)).date())
+                    flex_date = str(
+                        (
+                            datetime.strptime(rt_date, "%Y-%m-%d") - timedelta(days=i)
+                        ).date()
+                    )
                     if flex_date in prices:
                         key = (flex_date, origin, dest)
                         all_rt[key] = prices[flex_date]["price_cny"]
                         result["return_flex"][f"{flex_date}_{origin}_{dest}"] = {
-                            "route": f"{origin}→{dest}", **prices[flex_date]
+                            "route": f"{origin}→{dest}",
+                            **prices[flex_date],
                         }
 
     session.close()
@@ -256,7 +313,9 @@ def get_spring_price_for_trip(trip, proxy_url=None, proxy_id=None):
         }
 
     if result["outbound"] and result["return"]:
-        result["total_cny"] = result["outbound"]["price_cny"] + result["return"]["price_cny"]
+        result["total_cny"] = (
+            result["outbound"]["price_cny"] + result["return"]["price_cny"]
+        )
         result["status"] = "ok"
 
     return result
