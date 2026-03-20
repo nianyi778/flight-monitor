@@ -28,6 +28,8 @@ app/
 | LetsFG | CLI/SDK（100+ connectors + 可选 GDS/NDC） | 免费 | 多航司聚合价 |
 | Google Flights | fast-flights protobuf 逆向，纯 HTTP | 零 | 全航司日本站价 |
 
+> **携程（已于 v5.0 移除）**：API 接口下线，browser DOM fallback 也因 agent-browser 在 Docker 内无法启动 Chrome 而 100% 失败，故整体下架。代码保留于 `app/ctrip_api.py` 供参考，不再调用。
+
 ### 机场覆盖
 
 |  | PVG(浦东) |
