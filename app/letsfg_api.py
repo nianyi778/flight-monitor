@@ -134,7 +134,6 @@ def _extract_segment(offer: dict) -> tuple[str, str, str, str]:
         seg.get("flight_no")
         or seg.get("flightNumber")
         or seg.get("number")
-        or seg.get("id")
         or ""
     )
     dep = _normalize_time(
