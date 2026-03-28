@@ -444,6 +444,30 @@ async def _run_check_inner(force, all_trips, bot_module):
             )
             spring_best = spring.get("best_combo")
 
+            # 将春秋直销价加入 results，确保写入 flight_prices 历史记录
+            for direction, key in (("outbound", "outbound"), ("return", "return")):
+                spring_leg = spring.get(key)
+                if spring_leg and spring_leg.get("price_cny"):
+                    route = spring_leg.get("route", "")
+                    parts = route.split("→") if "→" in route else ["", ""]
+                    results[direction].append({
+                        "source": f"春秋_{parts[0]}_{parts[1]}",
+                        "flight_date": spring_leg.get("date"),
+                        "lowest_price": spring_leg.get("price_cny"),
+                        "flights": [{
+                            "airline": "春秋航空",
+                            "flight_no": "",
+                            "departure_time": "",
+                            "arrival_time": "",
+                            "origin": parts[0],
+                            "destination": parts[1],
+                            "price_cny": spring_leg.get("price_cny"),
+                            "original_price": None,
+                            "original_currency": "CNY",
+                            "stops": 0,
+                        }],
+                    })
+
             combos = find_best_combinations(results, trip)
             save_to_db(results, combos, trip)
 

@@ -78,29 +78,35 @@ def save_to_db(results, combos, trip):
         with get_db() as conn:
             cur = conn.cursor()
 
-            # 写入每条航班记录
+            # 写入每条航班记录（行级隔离：单行失败不中止整批）
             flights_count = 0
+            skipped_count = 0
             for direction in ["outbound", "return"]:
                 for src in results[direction]:
                     source_flight_date = src.get("flight_date") or (
                         trip["outbound_date"] if direction == "outbound" else trip["return_date"]
                     )
                     for f in src.get("flights", []):
-                        cur.execute(
-                            """INSERT INTO flight_prices
-                            (trip_id, check_time, direction, source, airline, flight_no,
-                             departure_time, arrival_time, origin, destination,
-                             price_cny, original_price, original_currency, stops, flight_date)
-                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                            (trip_id, now, direction, src.get("source", ""),
-                             f.get("airline", ""), f.get("flight_no", ""),
-                             f.get("departure_time", ""), f.get("arrival_time", ""),
-                             f.get("origin", ""), f.get("destination", ""),
-                             f.get("price_cny"), f.get("original_price"),
-                             f.get("original_currency", "CNY"), f.get("stops", 0),
-                             source_flight_date)
-                        )
-                        flights_count += 1
+                        try:
+                            cur.execute(
+                                """INSERT INTO flight_prices
+                                (trip_id, check_time, direction, source, airline, flight_no,
+                                 departure_time, arrival_time, origin, destination,
+                                 price_cny, original_price, original_currency, stops, flight_date)
+                                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                                (trip_id, now, direction,
+                                 src.get("source", "")[:30],
+                                 f.get("airline", "")[:50], f.get("flight_no", "")[:20],
+                                 f.get("departure_time", "")[:10], f.get("arrival_time", "")[:10],
+                                 f.get("origin", "")[:5], f.get("destination", "")[:5],
+                                 f.get("price_cny"), f.get("original_price"),
+                                 f.get("original_currency", "CNY")[:5], f.get("stops", 0),
+                                 source_flight_date)
+                            )
+                            flights_count += 1
+                        except Exception as row_err:
+                            skipped_count += 1
+                            log.warning(f"跳过异常行 ({src.get('source', '')}): {row_err}")
 
             # 写入巡查汇总
             best = combos[0] if combos else {}
@@ -116,13 +122,16 @@ def save_to_db(results, combos, trip):
                  best.get("total"),
                  ob_lowest if ob_lowest != 99999 else None,
                  rt_lowest if rt_lowest != 99999 else None,
-                 best.get("outbound", {}).get("airline", ""),
-                 best.get("return", {}).get("airline", ""),
+                 best.get("outbound", {}).get("airline", "")[:50],
+                 best.get("return", {}).get("airline", "")[:50],
                  flights_count)
             )
 
             conn.commit()
-            log.info(f"💾 已入库: {flights_count} 条航班 + 1 条汇总")
+            if skipped_count:
+                log.warning(f"💾 已入库: {flights_count} 条航班 + 1 条汇总 (跳过 {skipped_count} 条异常行)")
+            else:
+                log.info(f"💾 已入库: {flights_count} 条航班 + 1 条汇总")
 
     except Exception as e:
         log.error(f"数据库写入失败: {e}")
@@ -137,5 +146,5 @@ def already_checked_this_hour():
             cur.execute("SELECT COUNT(*) FROM check_summary WHERE check_time >= %s", (hour_start,))
             count = cur.fetchone()[0]
         return count > 0
-    except:
+    except Exception:
         return False

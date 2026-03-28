@@ -213,5 +213,138 @@ class MCPMetricsHistoryTests(unittest.TestCase):
         self.assertEqual(result["direction_coverage"][0]["direction"], "outbound")
 
 
+class DbSaveRegressionTests(unittest.TestCase):
+    """验证 save_to_db 的行级隔离、列截断和春秋写入行为"""
+
+    def _make_trip(self):
+        return {
+            "id": 1,
+            "outbound_date": "2026-09-18",
+            "return_date": "2026-09-28",
+            "budget": 3000,
+        }
+
+    def _make_results(self, flights_ob, flights_rt):
+        return {
+            "outbound": [{"source": "test_ob", "flights": flights_ob}],
+            "return": [{"source": "test_rt", "flights": flights_rt}],
+        }
+
+    def _run_save(self, results, trip=None):
+        """执行 save_to_db，收集所有 INSERT 参数，返回 inserted_rows"""
+        from app.db import save_to_db
+        trip = trip or self._make_trip()
+        inserted_rows = []
+
+        class FakeCur:
+            def execute(self_, query, params=None):
+                if params and "INSERT INTO flight_prices" in query:
+                    inserted_rows.append(params)
+
+        class FakeConn:
+            def cursor(self_): return FakeCur()
+            def commit(self_): pass
+            def rollback(self_): pass
+            def close(self_): pass
+            def __enter__(self_): return self_
+            def __exit__(self_, *a): pass
+
+        with patch("app.db.get_db", return_value=FakeConn()):
+            save_to_db(results, [], trip)
+        return inserted_rows
+
+    def test_normal_flight_is_inserted(self):
+        flights = [{"airline": "ANA", "flight_no": "NH101", "departure_time": "20:00",
+                    "arrival_time": "22:00", "origin": "NRT", "destination": "PVG",
+                    "price_cny": 1500, "original_price": 210, "original_currency": "USD", "stops": 0}]
+        rows = self._run_save(self._make_results(flights, flights))
+        self.assertEqual(len(rows), 2)
+        # flight_no 字段在 params 的索引 5
+        self.assertEqual(rows[0][5], "NH101")
+
+    def test_uuid_flight_no_is_truncated_to_20_chars(self):
+        """Critical #1 回归：UUID 不应再触发 VARCHAR(20) 溢出"""
+        uuid_flight_no = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+        flights = [{"airline": "X", "flight_no": uuid_flight_no, "departure_time": "20:00",
+                    "arrival_time": "22:00", "origin": "NRT", "destination": "PVG",
+                    "price_cny": 999, "original_price": None, "original_currency": "CNY", "stops": 0}]
+        rows = self._run_save(self._make_results(flights, []))
+        self.assertEqual(len(rows), 1)
+        stored_flight_no = rows[0][5]
+        self.assertLessEqual(len(stored_flight_no), 20)
+
+    def test_long_airline_name_is_truncated_to_50_chars(self):
+        long_airline = "A" * 80
+        flights = [{"airline": long_airline, "flight_no": "AA1", "departure_time": "20:00",
+                    "arrival_time": "22:00", "origin": "NRT", "destination": "PVG",
+                    "price_cny": 999, "original_price": None, "original_currency": "CNY", "stops": 0}]
+        rows = self._run_save(self._make_results(flights, []))
+        stored_airline = rows[0][4]
+        self.assertLessEqual(len(stored_airline), 50)
+
+    def test_long_source_is_truncated_to_30_chars(self):
+        long_source = "S" * 60
+        results = {
+            "outbound": [{"source": long_source, "flights": [
+                {"airline": "X", "flight_no": "X1", "departure_time": "20:00",
+                 "arrival_time": "22:00", "origin": "NRT", "destination": "PVG",
+                 "price_cny": 999, "original_price": None, "original_currency": "CNY", "stops": 0}
+            ]}],
+            "return": [],
+        }
+        rows = self._run_save(results)
+        stored_source = rows[0][3]
+        self.assertLessEqual(len(stored_source), 30)
+
+    def test_bad_row_does_not_abort_batch(self):
+        """Critical #2 回归：一行抛异常，其余行仍应写入"""
+        from app.db import save_to_db
+        trip = self._make_trip()
+        good_flight = {"airline": "ANA", "flight_no": "NH101", "departure_time": "20:00",
+                       "arrival_time": "22:00", "origin": "NRT", "destination": "PVG",
+                       "price_cny": 1500, "original_price": None, "original_currency": "CNY", "stops": 0}
+        results = {
+            "outbound": [{"source": "s", "flights": [good_flight, good_flight]}],
+            "return": [],
+        }
+
+        call_count = [0]
+
+        class FakeCurWithError:
+            def execute(self_, query, params=None):
+                if "INSERT INTO flight_prices" in query:
+                    call_count[0] += 1
+                    if call_count[0] == 1:
+                        raise Exception("simulated DB error on row 1")
+
+        class FakeConnWithError:
+            def cursor(self_): return FakeCurWithError()
+            def commit(self_): pass
+            def rollback(self_): pass
+            def close(self_): pass
+            def __enter__(self_): return self_
+            def __exit__(self_, *a): pass
+
+        with patch("app.db.get_db", return_value=FakeConnWithError()):
+            with self.assertLogs("flight_monitor", level="WARNING"):
+                save_to_db(results, [], trip)
+
+        # 第 2 行应仍被处理（call_count == 2）
+        self.assertEqual(call_count[0], 2)
+
+    def test_letsfg_extract_segment_no_uuid_fallback(self):
+        """Critical #1 根本修复验证：_extract_segment 不应把 id 当 flight_no"""
+        from app.letsfg_api import _extract_segment
+        offer = {
+            "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+            "airline": "ANA",
+            "departure_time": "20:00",
+            "arrival_time": "22:00",
+        }
+        _, flight_no, _, _ = _extract_segment(offer)
+        self.assertNotEqual(flight_no, "f47ac10b-58cc-4372-a567-0e02b2c3d479")
+        self.assertEqual(flight_no, "")
+
+
 if __name__ == "__main__":
     unittest.main()
