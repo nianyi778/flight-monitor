@@ -308,9 +308,11 @@ def edit_trip(
     if existing_trip["status"] != "active":
         return {"error": f"行程#{trip_id}不存在或不是active状态"}
 
-    # 切换为单程时，清空回程相关字段
+    # 仅在从 round_trip 切换为 one_way 时才清空回程相关字段
+    # 已经是 one_way 的行程编辑其他字段时不重复写 NULL，避免 NOT NULL 约束问题
     effective_type = trip_type or existing_trip.get("trip_type", "round_trip")
-    if effective_type == "one_way":
+    switching_to_one_way = (effective_type == "one_way" and existing_trip.get("trip_type") != "one_way")
+    if switching_to_one_way:
         updates["return_date"] = None
         updates["return_arrive_start"] = None
         updates["return_arrive_end"] = None
