@@ -421,6 +421,8 @@ async def _run_check_inner(force, all_trips, bot_module):
                     )
                     results[direction].append(a)
 
+            is_one_way = trip.get("trip_type") == "one_way"
+
             # 春秋官网直销价（零成本、100%准确）
             from app.spring_api import get_spring_price_for_trip
 
@@ -445,7 +447,8 @@ async def _run_check_inner(force, all_trips, bot_module):
             spring_best = spring.get("best_combo")
 
             # 将春秋直销价加入 results，确保写入 flight_prices 历史记录
-            for direction, key in (("outbound", "outbound"), ("return", "return")):
+            spring_directions = [("outbound", "outbound")] if is_one_way else [("outbound", "outbound"), ("return", "return")]
+            for direction, key in spring_directions:
                 spring_leg = spring.get(key)
                 if spring_leg and spring_leg.get("price_cny"):
                     route = spring_leg.get("route", "")
@@ -472,7 +475,7 @@ async def _run_check_inner(force, all_trips, bot_module):
             save_to_db(results, combos, trip)
 
             # 如果春秋官网比携程/LetsFG/Google 更便宜，插入到 combos 最前面
-            if spring_best and spring_best.get("total_cny"):
+            if spring_best and spring_best.get("total_cny") and not is_one_way:
                 ota_best = combos[0]["total"] if combos else 99999
                 if spring_best["total_cny"] < ota_best:
                     log.info(
@@ -542,7 +545,7 @@ async def _run_check_inner(force, all_trips, bot_module):
                 new_best = min(best_total or 99999, prev_best or 99999)
 
                 best_ob = combos[0]["outbound"] if combos else {}
-                best_rt = combos[0]["return"] if combos else {}
+                best_rt = (combos[0]["return"] if combos else None) or {}
 
                 ob_date_tag = (
                     f" [{best_ob.get('_flight_date', '')}]"
@@ -561,22 +564,32 @@ async def _run_check_inner(force, all_trips, bot_module):
                     if best_ob
                     else "无数据"
                 )
-                rt_info = (
-                    f"{best_rt.get('airline', '?')} {best_rt.get('departure_time', '')}→{best_rt.get('arrival_time', '')} {_brief_price(best_rt)} ({best_rt.get('_source', '')}){rt_date_tag}"
-                    if best_rt
-                    else "无数据"
-                )
 
                 interval = _get_check_interval_for_trip(trip)
                 freq = f"{interval // 3600}h" if interval else "?"
+                type_tag = "单程" if is_one_way else ""
+                date_range = trip["outbound_date"] if is_one_way else f"{trip['outbound_date']}→{trip.get('return_date', '?')}"
 
-                brief_lines.append(
-                    f"✈️ *#{trip['id']}* {trip['outbound_date']}→{trip['return_date']} (¥{budget} 频率{freq})\n"
-                    f"  最低: ¥{best_total or '?'}{trend} | 差预算: {diff}\n"
-                    f"  去: {ob_info}\n"
-                    f"  回: {rt_info}\n"
-                    f"  历史最低: ¥{new_best if new_best < 99999 else '?'}"
-                )
+                if is_one_way:
+                    brief_lines.append(
+                        f"✈️ *#{trip['id']}* {date_range} {type_tag} (¥{budget} 频率{freq})\n"
+                        f"  最低: ¥{best_total or '?'}{trend} | 差预算: {diff}\n"
+                        f"  去: {ob_info}\n"
+                        f"  历史最低: ¥{new_best if new_best < 99999 else '?'}"
+                    )
+                else:
+                    rt_info = (
+                        f"{best_rt.get('airline', '?')} {best_rt.get('departure_time', '')}→{best_rt.get('arrival_time', '')} {_brief_price(best_rt)} ({best_rt.get('_source', '')}){rt_date_tag}"
+                        if best_rt
+                        else "无数据"
+                    )
+                    brief_lines.append(
+                        f"✈️ *#{trip['id']}* {date_range} (¥{budget} 频率{freq})\n"
+                        f"  最低: ¥{best_total or '?'}{trend} | 差预算: {diff}\n"
+                        f"  去: {ob_info}\n"
+                        f"  回: {rt_info}\n"
+                        f"  历史最低: ¥{new_best if new_best < 99999 else '?'}"
+                    )
         except Exception as e:
             log.error(f"行程 #{trip['id']} 处理失败: {e}", exc_info=True)
             brief_lines.append(f"✈️ *#{trip['id']}* 处理失败: {e}")

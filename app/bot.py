@@ -121,16 +121,17 @@ def _get_all_trips():
             cur = db.cursor()
             cur.execute(
                 "SELECT id, outbound_date, return_date, budget, best_price, "
-                "outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end, status "
+                "outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end, status, trip_type "
                 "FROM trips WHERE status IN ('active', 'paused') ORDER BY outbound_date"
             )
             rows = cur.fetchall()
         return [
-            {"id": r[0], "outbound_date": str(r[1]), "return_date": str(r[2]),
+            {"id": r[0], "outbound_date": str(r[1]),
+             "return_date": str(r[2]) if r[2] else None,
              "budget": r[3], "best_price": r[4],
              "depart_after": r[5] or 19, "depart_before": r[6] or 23,
              "arrive_after": r[7] or 0, "arrive_before": r[8] or 6,
-             "status": r[9]}
+             "status": r[9], "trip_type": r[10] or "round_trip"}
             for r in rows
         ]
     except Exception as e:
@@ -163,9 +164,15 @@ def _handle_trips():
         budget = t["budget"]
         da, db_ = t["depart_after"], t["depart_before"]
         aa, ab = t["arrive_after"], t["arrive_before"]
+        is_one_way = t.get("trip_type") == "one_way"
+        type_tag = " [单程]" if is_one_way else ""
+        date_display = t["outbound_date"] if is_one_way else f"{t['outbound_date']} → {t.get('return_date', '?')}"
 
-        lines.append(f"🟢 *#{tid}* {t['outbound_date']} → {t['return_date']}  {countdown}")
-        lines.append(f"  💰 ¥{budget:,}  🛫{da}-{db_}点  🛬{aa}-{ab}点")
+        lines.append(f"🟢 *#{tid}* {date_display}{type_tag}  {countdown}")
+        if is_one_way:
+            lines.append(f"  💰 ¥{budget:,}  🛫{da}-{db_}点")
+        else:
+            lines.append(f"  💰 ¥{budget:,}  🛫{da}-{db_}点  🛬{aa}-{ab}点")
         if best:
             diff = best - budget
             sign = f"+¥{diff:,}" if diff > 0 else f"¥{diff:,} ✅"
@@ -177,7 +184,10 @@ def _handle_trips():
 
     if paused:
         for t in paused:
-            lines.append(f"⏸ #{t['id']} {t['outbound_date']}→{t['return_date']}")
+            is_one_way = t.get("trip_type") == "one_way"
+            date_display = t["outbound_date"] if is_one_way else f"{t['outbound_date']}→{t.get('return_date', '?')}"
+            type_tag = "[单程]" if is_one_way else ""
+            lines.append(f"⏸ #{t['id']} {date_display} {type_tag}")
 
     # 生成每个行程的操作按钮
     buttons = []
@@ -201,31 +211,52 @@ def _handle_trips():
 
 
 def _validate_trip_input(text):
-    """校验行程输入，返回 (parsed_data, error_msg)"""
+    """校验行程输入，返回 (parsed_data, error_msg)
+
+    往返格式: /trip add 去程 回程 [预算] [去H-H] [回H-H]
+    单程格式: /trip add 去程 单程 [预算] [去H-H]
+    """
     parts = text.split()
-    if len(parts) < 4:
+    if len(parts) < 3:
         return None, (
             "✈️ *添加行程*\n\n"
-            "格式: `/trip add 去程 回程 [预算] [去H-H] [回H-H]`\n\n"
+            "往返格式: `/trip add 去程 回程 [预算] [去H-H] [回H-H]`\n"
+            "单程格式: `/trip add 去程 单程 [预算] [去H-H]`\n\n"
             "例:\n"
             "`/trip add 2026-09-18 2026-09-28 1500 去19-23 回0-6`\n"
-            "`/trip add 2026-09-18 2026-09-28 1500`\n"
-            "`/trip add 2026-12-28 2027-01-05`  (默认¥1500)"
+            "`/trip add 2026-09-18 单程 800 去19-23`\n"
+            "`/trip add 2026-12-28 2027-01-05`  (往返，默认¥1500)"
         )
 
     errors = []
-    ob_d, rt_d = parts[2], parts[3]
+    ob_d = parts[2]
+    second_arg = parts[3] if len(parts) > 3 else None
 
-    # 1. 日期格式校验
+    # 检测单程模式：第二个参数是"单程"关键字
+    is_one_way = second_arg in ("单程", "单", "one_way", "oneway") if second_arg else False
+
+    # 1. 去程日期校验
     try:
         ob_date = datetime.strptime(ob_d, "%Y-%m-%d").date()
     except ValueError:
         errors.append(f"❌ 去程日期格式错误: `{ob_d}` (应为 YYYY-MM-DD)")
+        return None, "\n".join(errors)
 
-    try:
-        rt_date = datetime.strptime(rt_d, "%Y-%m-%d").date()
-    except ValueError:
-        errors.append(f"❌ 回程日期格式错误: `{rt_d}` (应为 YYYY-MM-DD)")
+    rt_d = None
+    rt_date = None
+    if not is_one_way:
+        if second_arg is None:
+            return None, (
+                "✈️ *添加行程*\n\n"
+                "往返格式: `/trip add 去程 回程 [预算] [去H-H] [回H-H]`\n"
+                "单程格式: `/trip add 去程 单程 [预算] [去H-H]`"
+            )
+        rt_d = second_arg
+        try:
+            rt_date = datetime.strptime(rt_d, "%Y-%m-%d").date()
+        except ValueError:
+            errors.append(f"❌ 回程日期格式错误: `{rt_d}` (应为 YYYY-MM-DD 或 '单程')")
+            return None, "\n".join(errors)
 
     if errors:
         return None, "\n".join(errors)
@@ -234,17 +265,20 @@ def _validate_trip_input(text):
     today = now_jst().date()
     if ob_date <= today:
         errors.append(f"❌ 去程日期 `{ob_d}` 已过期（今天是 {today}）")
-    if rt_date <= ob_date:
-        errors.append(f"❌ 回程日期 `{rt_d}` 必须晚于去程 `{ob_d}`")
-    if (rt_date - ob_date).days > 30:
-        errors.append(f"⚠️ 行程跨度 {(rt_date - ob_date).days} 天，超过30天，确认日期是否正确？")
+    if not is_one_way and rt_date:
+        if rt_date <= ob_date:
+            errors.append(f"❌ 回程日期 `{rt_d}` 必须晚于去程 `{ob_d}`")
+        if (rt_date - ob_date).days > 30:
+            errors.append(f"⚠️ 行程跨度 {(rt_date - ob_date).days} 天，超过30天，确认日期是否正确？")
 
-    # 3. 解析可选参数
+    # 3. 解析可选参数（跳过已识别的前两个参数）
     bgt = 1500
     ob_start, ob_end = 19, 23
     rt_start, rt_end = 0, 6
 
-    for p in parts[4:]:
+    extra_parts = parts[4:]
+
+    for p in extra_parts:
         if p.startswith("去"):
             try:
                 s, e = [int(x) for x in p.replace("去", "").split("-")]
@@ -256,7 +290,7 @@ def _validate_trip_input(text):
                     ob_start, ob_end = s, e
             except:
                 errors.append(f"❌ 去程时间格式错误: `{p}` (应为 去H-H)")
-        elif p.startswith("回"):
+        elif p.startswith("回") and not is_one_way:
             try:
                 s, e = [int(x) for x in p.replace("回", "").split("-")]
                 if not (0 <= s <= 23 and 0 <= e <= 23):
@@ -277,6 +311,7 @@ def _validate_trip_input(text):
 
     return {
         "ob_d": ob_d, "rt_d": rt_d, "budget": bgt,
+        "trip_type": "one_way" if is_one_way else "round_trip",
         "ob_start": ob_start, "ob_end": ob_end,
         "rt_start": rt_start, "rt_end": rt_end,
     }, None
@@ -344,22 +379,33 @@ def _handle_trip_add(text):
         return
 
     # 生成预览卡片，不写入数据库
+    is_one_way = data.get("trip_type") == "one_way"
     countdown = _days_until(data["ob_d"])
-    days = (datetime.strptime(data["rt_d"], "%Y-%m-%d").date() -
-            datetime.strptime(data["ob_d"], "%Y-%m-%d").date()).days
+    rt_d = data.get("rt_d") or ""
+    type_label = "单程" if is_one_way else "往返"
 
     # 把校验通过的数据编码到 callback_data 里
-    cb_data = (f"trip_confirm_{data['ob_d']}_{data['rt_d']}_{data['budget']}_"
-               f"{data['ob_start']}-{data['ob_end']}_{data['rt_start']}-{data['rt_end']}")
+    # 格式: trip_confirm_{ob_d}_{rt_d}_{budget}_{ob_start}-{ob_end}_{rt_start}-{rt_end}_{trip_type}
+    cb_data = (f"trip_confirm_{data['ob_d']}_{rt_d}_{data['budget']}_"
+               f"{data['ob_start']}-{data['ob_end']}_{data['rt_start']}-{data['rt_end']}_"
+               f"{data.get('trip_type', 'round_trip')}")
+
+    preview_lines = [
+        f"✈️ *请确认行程信息* [{type_label}]\n",
+        f"📅 去程: {data['ob_d']}  ({countdown})",
+    ]
+    if not is_one_way and rt_d:
+        days = (datetime.strptime(rt_d, "%Y-%m-%d").date() -
+                datetime.strptime(data["ob_d"], "%Y-%m-%d").date()).days
+        preview_lines.append(f"📅 回程: {rt_d}  (共{days}天)")
+    preview_lines.append(f"💰 预算: ¥{data['budget']:,}(CNY) {type_label}")
+    preview_lines.append(f"🛫 去程出发: {data['ob_start']}:00-{data['ob_end']}:00")
+    if not is_one_way:
+        preview_lines.append(f"🛬 回程到达: {data['rt_start']}:00-{data['rt_end']}:00")
+    preview_lines.append("\n信息正确吗？")
 
     tg_send_with_buttons(
-        f"✈️ *请确认行程信息*\n\n"
-        f"📅 去程: {data['ob_d']}  ({countdown})\n"
-        f"📅 回程: {data['rt_d']}  (共{days}天)\n"
-        f"💰 预算: ¥{data['budget']:,}(CNY)\n"
-        f"🛫 去程出发: {data['ob_start']}:00-{data['ob_end']}:00\n"
-        f"🛬 回程到达: {data['rt_start']}:00-{data['rt_end']}:00\n\n"
-        f"信息正确吗？",
+        "\n".join(preview_lines),
         [
             [{"text": "✅ 确认添加", "callback_data": cb_data},
              {"text": "❌ 取消", "callback_data": "cancel_add"}],
@@ -430,7 +476,8 @@ def _handle_status():
         for t in trips:
             best = t.get("best_price")
             best_str = f"¥{best:,}" if best else "暂无"
-            lines.append(f"#{t['id']} {t['outbound_date']}→{t['return_date']} 预算¥{t['budget']:,} 最低{best_str}")
+            date_display = t["outbound_date"] if not t.get("return_date") else f"{t['outbound_date']}→{t['return_date']}"
+            lines.append(f"#{t['id']} {date_display} 预算¥{t['budget']:,} 最低{best_str}")
 
     tg_send_with_buttons("\n".join(lines), [
         [{"text": "🩺 健康检查", "callback_data": "health_check"},
@@ -541,31 +588,44 @@ def _handle_callback(callback_id, data, message_id):
         tg_edit_message(message_id, "❌ 已取消添加")
 
     elif data.startswith("trip_confirm_"):
-        # trip_confirm_2026-09-18_2026-09-28_1500_19-23_0-6
+        # trip_confirm_{ob_d}_{rt_d}_{budget}_{ob_start}-{ob_end}_{rt_start}-{rt_end}_{trip_type}
+        # rt_d may be empty string for one-way trips
         try:
-            _, _, ob_d, rt_d, bgt_str, ob_time, rt_time = data.split("_", 6)
-            bgt = int(bgt_str)
-            ob_s, ob_e = [int(x) for x in ob_time.split("-")]
-            rt_s, rt_e = [int(x) for x in rt_time.split("-")]
+            parts_cb = data.split("_", 7)
+            # parts_cb[0]="trip", [1]="confirm", [2]=ob_d, [3]=rt_d_or_empty,
+            # [4]=bgt_str, [5]=ob_time, [6]=rt_time, [7]=trip_type (optional)
+            ob_d = parts_cb[2]
+            rt_d = parts_cb[3]
+            bgt = int(parts_cb[4])
+            ob_s, ob_e = [int(x) for x in parts_cb[5].split("-")]
+            rt_s, rt_e = [int(x) for x in parts_cb[6].split("-")]
+            trip_type = parts_cb[7] if len(parts_cb) > 7 else "round_trip"
+            is_one_way = trip_type == "one_way"
 
             with get_db() as db:
                 c = db.cursor()
                 c.execute(
-                    "INSERT INTO trips (outbound_date, return_date, budget, "
+                    "INSERT INTO trips (outbound_date, return_date, budget, trip_type, "
                     "outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                    (ob_d, rt_d, bgt, ob_s, ob_e, rt_s, rt_e)
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    (ob_d, None if is_one_way else rt_d, bgt, trip_type,
+                     ob_s, ob_e,
+                     None if is_one_way else rt_s,
+                     None if is_one_way else rt_e)
                 )
                 db.commit()
                 new_id = c.lastrowid
 
             tg_answer_callback(callback_id, f"✅ 行程#{new_id}已添加")
             countdown = _days_until(ob_d)
+            type_label = "单程" if is_one_way else "往返"
+            date_line = ob_d if is_one_way else f"{ob_d} → {rt_d}"
+            arrive_line = "" if is_one_way else f"  🛬 {rt_s}:00-{rt_e}:00"
             tg_edit_message(message_id,
-                f"✅ *行程#{new_id} 已添加!*\n\n"
-                f"📅 {ob_d} → {rt_d}  ({countdown})\n"
+                f"✅ *行程#{new_id} 已添加!* [{type_label}]\n\n"
+                f"📅 {date_line}  ({countdown})\n"
                 f"💰 ¥{bgt:,}(CNY)\n"
-                f"🛫 {ob_s}:00-{ob_e}:00  🛬 {rt_s}:00-{rt_e}:00\n\n"
+                f"🛫 {ob_s}:00-{ob_e}:00{arrive_line}\n\n"
                 f"系统将在下次巡查时开始监控此行程",
                 [[{"text": "🔍 立即查价", "callback_data": "do_check"},
                   {"text": "✈️ 查看行程", "callback_data": "show_trips"}]]

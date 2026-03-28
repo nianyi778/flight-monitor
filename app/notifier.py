@@ -67,48 +67,61 @@ def _brief_price(f):
 def format_alert_message(combos, results, trip=None):
     ts = now_jst().strftime("%Y-%m-%d %H:%M")
     ob_date = trip["outbound_date"] if trip else "?"
-    rt_date = trip["return_date"] if trip else "?"
+    rt_date = trip.get("return_date") if trip else None
     budget = trip["budget"] if trip else 1500
     trip_id = trip["id"] if trip else "?"
+    is_one_way = (trip.get("trip_type") == "one_way") if trip else False
 
     lines = [f"✈️ *机票价格更新* ({ts}) 行程#{trip_id}\n"]
     lines.append(f"📅 去程: {ob_date} 东京→上海")
-    lines.append(f"📅 回程: {rt_date} 上海→东京")
-    lines.append(f"💰 预算: ¥{budget}(CNY) 往返\n")
+    if not is_one_way and rt_date:
+        lines.append(f"📅 回程: {rt_date} 上海→东京")
+    type_label = "单程" if is_one_way else "往返"
+    lines.append(f"💰 预算: ¥{budget}(CNY) {type_label}\n")
 
     if combos:
         best = combos[0]
         ob = best["outbound"]
-        rt = best["return"]
+        rt = best.get("return")
         emoji = "🎉" if best["within_budget"] else "📊"
 
-        lines.append(f"{emoji} *最优组合: ¥{best['total']}*")
+        lines.append(f"{emoji} *最优{'单程' if is_one_way else '组合'}: ¥{best['total']}*")
         lines.append(f"{'✅ 低于预算!' if best['within_budget'] else '⚠️ 超出预算'}\n")
 
         lines.append(f"*去程* {ob.get('airline', '')} {ob.get('flight_no', '')}")
         lines.append(f"  {ob.get('departure_time', '')}→{ob.get('arrival_time', '')} {_price_str(ob)} ({ob.get('_source', '')})")
 
-        lines.append(f"*回程* {rt.get('airline', '')} {rt.get('flight_no', '')}")
-        lines.append(f"  {rt.get('departure_time', '')}→{rt.get('arrival_time', '')} {_price_str(rt)} ({rt.get('_source', '')})")
+        if not is_one_way and rt:
+            lines.append(f"*回程* {rt.get('airline', '')} {rt.get('flight_no', '')}")
+            lines.append(f"  {rt.get('departure_time', '')}→{rt.get('arrival_time', '')} {_price_str(rt)} ({rt.get('_source', '')})")
 
         lines.append(f"\n🔗 *购买链接:*")
         lines.append(f"去程: {ob.get('_url', '')}")
-        lines.append(f"回程: {rt.get('_url', '')}")
+        if not is_one_way and rt:
+            lines.append(f"回程: {rt.get('_url', '')}")
 
         if len(combos) > 1:
-            lines.append(f"\n📋 *其他组合 (前5):*")
+            lines.append(f"\n📋 *其他选项 (前5):*")
             for i, c in enumerate(combos[1:5], 2):
-                o, r = c["outbound"], c["return"]
-                lines.append(
-                    f"{i}. ¥{c['total']} | "
-                    f"{o.get('airline', '?')} {o.get('departure_time', '')} + "
-                    f"{r.get('airline', '?')} {r.get('departure_time', '')}"
-                )
+                o = c["outbound"]
+                r = c.get("return")
+                if is_one_way or not r:
+                    lines.append(
+                        f"{i}. ¥{c['total']} | "
+                        f"{o.get('airline', '?')} {o.get('departure_time', '')}"
+                    )
+                else:
+                    lines.append(
+                        f"{i}. ¥{c['total']} | "
+                        f"{o.get('airline', '?')} {o.get('departure_time', '')} + "
+                        f"{r.get('airline', '?')} {r.get('departure_time', '')}"
+                    )
     else:
-        lines.append("⚠️ 未能组合出符合时间要求的航班\n")
+        lines.append("⚠️ 未能找到符合时间要求的航班\n")
         lines.append("*各平台最低价:*")
-        for direction, label in [("outbound", "去程"), ("return", "回程")]:
-            for src in results[direction]:
+        directions = [("outbound", "去程")] if is_one_way else [("outbound", "去程"), ("return", "回程")]
+        for direction, label in directions:
+            for src in results.get(direction, []):
                 lp = src.get("lowest_price")
                 if lp:
                     lines.append(f"  {label} {src['source']}: ¥{lp}")
