@@ -62,19 +62,24 @@ docker compose logs -f
 CREATE TABLE trips (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     outbound_date DATE NOT NULL,
-    return_date DATE NOT NULL,
+    return_date DATE,                          -- 单程行程时为 NULL
     budget INT NOT NULL DEFAULT 1500,
+    trip_type VARCHAR(10) DEFAULT 'round_trip', -- round_trip | one_way
     status VARCHAR(10) DEFAULT 'active',
     best_price INT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     outbound_depart_start INT DEFAULT 19,
     outbound_depart_end INT DEFAULT 23,
-    return_arrive_start INT DEFAULT 0,
-    return_arrive_end INT DEFAULT 6,
+    return_arrive_start INT DEFAULT 0,         -- 单程时为 NULL
+    return_arrive_end INT DEFAULT 6,           -- 单程时为 NULL
     outbound_flex INT DEFAULT 0,
-    return_flex INT DEFAULT 1,
+    return_flex INT DEFAULT 1,                 -- 单程时为 NULL
     INDEX idx_status (status)
 );
+
+-- 已有数据库迁移（旧版升级执行一次）：
+-- ALTER TABLE trips MODIFY COLUMN return_date DATE NULL;
+-- ALTER TABLE trips ADD COLUMN trip_type VARCHAR(10) DEFAULT 'round_trip' AFTER budget;
 
 CREATE TABLE flight_prices (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
