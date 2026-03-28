@@ -40,16 +40,18 @@ def get_active_trips():
             cur.execute(
                 "SELECT id, outbound_date, return_date, budget, best_price, "
                 "outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end, "
-                "outbound_flex, return_flex "
+                "outbound_flex, return_flex, trip_type "
                 "FROM trips WHERE status='active'"
             )
             rows = cur.fetchall()
         return [
-            {"id": r[0], "outbound_date": str(r[1]), "return_date": str(r[2]),
+            {"id": r[0], "outbound_date": str(r[1]),
+             "return_date": str(r[2]) if r[2] else None,
              "budget": r[3], "best_price": r[4],
              "depart_after": r[5] or 19, "depart_before": r[6] or 23,
              "arrive_after": r[7] or 0, "arrive_before": r[8] or 6,
-             "outbound_flex": r[9] or 0, "return_flex": r[10] if r[10] is not None else 1}
+             "outbound_flex": r[9] or 0, "return_flex": r[10] if r[10] is not None else 1,
+             "trip_type": r[11] or "round_trip"}
             for r in rows
         ]
     except Exception as e:
@@ -81,7 +83,9 @@ def save_to_db(results, combos, trip):
             # 写入每条航班记录（行级隔离：单行失败不中止整批）
             flights_count = 0
             skipped_count = 0
-            for direction in ["outbound", "return"]:
+            is_one_way = trip.get("trip_type") == "one_way"
+            directions = ["outbound"] if is_one_way else ["outbound", "return"]
+            for direction in directions:
                 for src in results[direction]:
                     source_flight_date = src.get("flight_date") or (
                         trip["outbound_date"] if direction == "outbound" else trip["return_date"]
@@ -110,8 +114,16 @@ def save_to_db(results, combos, trip):
 
             # 写入巡查汇总
             best = combos[0] if combos else {}
+            is_one_way = trip.get("trip_type") == "one_way"
             ob_lowest = min((s.get("lowest_price") or 99999 for s in results["outbound"]), default=None)
-            rt_lowest = min((s.get("lowest_price") or 99999 for s in results["return"]), default=None)
+            if is_one_way:
+                rt_lowest = None
+                best_total = best.get("total") or (ob_lowest if ob_lowest and ob_lowest != 99999 else None)
+                best_return_airline = ""
+            else:
+                rt_lowest = min((s.get("lowest_price") or 99999 for s in results["return"]), default=None)
+                best_total = best.get("total")
+                best_return_airline = best.get("return", {}).get("airline", "")[:50]
 
             cur.execute(
                 """INSERT INTO check_summary
@@ -119,11 +131,11 @@ def save_to_db(results, combos, trip):
                  best_outbound_airline, best_return_airline, flights_found)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (trip_id, now,
-                 best.get("total"),
-                 ob_lowest if ob_lowest != 99999 else None,
-                 rt_lowest if rt_lowest != 99999 else None,
+                 best_total,
+                 ob_lowest if ob_lowest and ob_lowest != 99999 else None,
+                 rt_lowest if rt_lowest and rt_lowest != 99999 else None,
                  best.get("outbound", {}).get("airline", "")[:50],
-                 best.get("return", {}).get("airline", "")[:50],
+                 best_return_airline,
                  flights_count)
             )
 

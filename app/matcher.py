@@ -37,12 +37,13 @@ def _effective_flex(trip, days_to_depart):
 
 
 def get_search_urls(trip):
-    """根据行程生成搜索 URL（支持弹性日期，按倒计时自动收缩）"""
+    """根据行程生成搜索 URL（支持弹性日期，按倒计时自动收缩；单程只生成去程URL）"""
+    is_one_way = trip.get("trip_type") == "one_way"
     days_to_depart = (datetime.strptime(trip["outbound_date"], "%Y-%m-%d").date() - datetime.now().date()).days
     ob_flex, rt_flex = _effective_flex(trip, days_to_depart)
 
     ob_dates = _date_range(trip["outbound_date"], ob_flex, "before")
-    rt_dates = _date_range(trip["return_date"], rt_flex, "before")
+    rt_dates = [] if is_one_way else _date_range(trip["return_date"], rt_flex, "before")
 
     urls = []
 
@@ -71,12 +72,15 @@ def get_search_urls(trip):
     ]
 
     for name, direction, pair, url_tpl in templates:
+        if is_one_way and direction == "return":
+            continue  # 单程：跳过所有回程搜索
         dates = ob_dates if direction == "outbound" else rt_dates
         origin, destination = pair.split("-")
         source_type = "ctrip" if "携程" in name else ("letsfg" if "LetsFG" in name else "google")
         for date in dates:
             # 弹性日期加日期后缀区分
-            suffix = f"({date})" if date != (trip["outbound_date"] if direction == "outbound" else trip["return_date"]) else ""
+            base_date = trip["outbound_date"] if direction == "outbound" else trip.get("return_date", "")
+            suffix = f"({date})" if date != base_date else ""
             from_to = pair.replace("-", "→")
             urls.append({
                 "name": f"{name}{suffix}",
@@ -94,12 +98,13 @@ def get_search_urls(trip):
 
 
 def find_best_combinations(results, trip):
-    """找出符合条件的最优往返组合"""
+    """找出符合条件的最优组合（往返或单程）"""
     depart_after = trip.get("depart_after", 19)
     depart_before = trip.get("depart_before", 23)
     arrive_after = trip.get("arrive_after", 0)
     arrive_before = trip.get("arrive_before", 6)
     budget = trip.get("budget", 1500)
+    is_one_way = trip.get("trip_type") == "one_way"
 
     outbound_flights = []
     for src in results["outbound"]:
@@ -109,9 +114,24 @@ def find_best_combinations(results, trip):
             if dep_hour is not None and not (depart_after <= dep_hour <= depart_before):
                 continue
             f["_source"] = src["source"]
-            f["_url"] = src["url"]
+            f["_url"] = src.get("url", "")
             f["_flight_date"] = src.get("flight_date", trip["outbound_date"])
             outbound_flights.append(f)
+
+    outbound_flights.sort(key=lambda x: x.get("price_cny", 99999))
+
+    if is_one_way:
+        # 单程：每个去程航班单独成为一个 combo，total = 去程价格
+        combos = []
+        for ob in outbound_flights[:10]:
+            total = ob.get("price_cny") or 99999
+            combos.append({
+                "outbound": ob,
+                "return": None,
+                "total": total,
+                "within_budget": total <= budget,
+            })
+        return combos[:10]
 
     return_flights = []
     for src in results["return"]:
@@ -121,11 +141,10 @@ def find_best_combinations(results, trip):
             if arr_hour is not None and not (arrive_after <= arr_hour <= arrive_before):
                 continue
             f["_source"] = src["source"]
-            f["_url"] = src["url"]
+            f["_url"] = src.get("url", "")
             f["_flight_date"] = src.get("flight_date", trip["return_date"])
             return_flights.append(f)
 
-    outbound_flights.sort(key=lambda x: x.get("price_cny", 99999))
     return_flights.sort(key=lambda x: x.get("price_cny", 99999))
 
     combos = []
