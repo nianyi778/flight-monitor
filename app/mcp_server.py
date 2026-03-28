@@ -47,19 +47,28 @@ def _normalize_days(days: int) -> int:
 
 def _validate_trip_fields(payload: dict, existing_trip: dict | None = None) -> dict | None:
     """校验 MCP 写入 trips 的字段。返回错误 dict，成功返回 None。"""
+    trip_type = payload.get("trip_type", existing_trip.get("trip_type") if existing_trip else "round_trip") or "round_trip"
+    if trip_type not in ("round_trip", "one_way"):
+        return {"error": "trip_type 必须是 round_trip 或 one_way"}
+
     outbound_date = payload.get("outbound_date", existing_trip.get("outbound_date") if existing_trip else None)
     return_date = payload.get("return_date", existing_trip.get("return_date") if existing_trip else None)
 
     try:
         ob = datetime.strptime(outbound_date, "%Y-%m-%d").date()
-        rt = datetime.strptime(return_date, "%Y-%m-%d").date()
     except Exception:
-        return {"error": "日期格式错误，请用 YYYY-MM-DD"}
+        return {"error": "去程日期格式错误，请用 YYYY-MM-DD"}
 
     if ob <= now_jst().date():
         return {"error": "去程日期已过期"}
-    if rt <= ob:
-        return {"error": "回程日期必须晚于去程日期"}
+
+    if trip_type == "round_trip":
+        try:
+            rt = datetime.strptime(return_date, "%Y-%m-%d").date()
+        except Exception:
+            return {"error": "往返行程需要回程日期，格式 YYYY-MM-DD"}
+        if rt <= ob:
+            return {"error": "回程日期必须晚于去程日期"}
 
     budget = payload.get("budget", existing_trip.get("budget") if existing_trip else 1500)
     try:
@@ -72,9 +81,10 @@ def _validate_trip_fields(payload: dict, existing_trip: dict | None = None) -> d
     hour_fields = {
         "depart_start": payload.get("depart_start", existing_trip.get("depart_start") if existing_trip else 19),
         "depart_end": payload.get("depart_end", existing_trip.get("depart_end") if existing_trip else 23),
-        "arrive_start": payload.get("arrive_start", existing_trip.get("arrive_start") if existing_trip else 0),
-        "arrive_end": payload.get("arrive_end", existing_trip.get("arrive_end") if existing_trip else 6),
     }
+    if trip_type == "round_trip":
+        hour_fields["arrive_start"] = payload.get("arrive_start", existing_trip.get("arrive_start") if existing_trip else 0)
+        hour_fields["arrive_end"] = payload.get("arrive_end", existing_trip.get("arrive_end") if existing_trip else 6)
     normalized_hours = {}
     for name, value in hour_fields.items():
         try:
@@ -83,15 +93,16 @@ def _validate_trip_fields(payload: dict, existing_trip: dict | None = None) -> d
             return {"error": f"{name} 必须是 0-23 的整数"}
         if not (0 <= normalized_hours[name] <= 23):
             return {"error": f"{name} 必须在 0-23"}
-    if normalized_hours["depart_start"] > normalized_hours["depart_end"]:
+    if normalized_hours.get("depart_start", 0) > normalized_hours.get("depart_end", 23):
         return {"error": "去程时间窗口无效"}
-    if normalized_hours["arrive_start"] > normalized_hours["arrive_end"]:
+    if "arrive_start" in normalized_hours and normalized_hours["arrive_start"] > normalized_hours["arrive_end"]:
         return {"error": "回程时间窗口无效"}
 
     flex_fields = {
         "outbound_flex": payload.get("outbound_flex", existing_trip.get("outbound_flex") if existing_trip else 0),
-        "return_flex": payload.get("return_flex", existing_trip.get("return_flex") if existing_trip else 1),
     }
+    if trip_type == "round_trip":
+        flex_fields["return_flex"] = payload.get("return_flex", existing_trip.get("return_flex") if existing_trip else 1)
     for name, value in flex_fields.items():
         try:
             flex_value = int(value)
@@ -109,7 +120,7 @@ def _get_trip_for_update(trip_id: int) -> dict | None:
         c.execute(
             "SELECT outbound_date, return_date, budget, "
             "outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end, "
-            "outbound_flex, return_flex, status "
+            "outbound_flex, return_flex, status, trip_type "
             "FROM trips WHERE id=%s",
             (trip_id,),
         )
@@ -118,7 +129,7 @@ def _get_trip_for_update(trip_id: int) -> dict | None:
         return None
     return {
         "outbound_date": str(row[0]),
-        "return_date": str(row[1]),
+        "return_date": str(row[1]) if row[1] else None,
         "budget": row[2],
         "depart_start": row[3],
         "depart_end": row[4],
@@ -127,6 +138,7 @@ def _get_trip_for_update(trip_id: int) -> dict | None:
         "outbound_flex": row[7] or 0,
         "return_flex": row[8] if row[8] is not None else 1,
         "status": row[9],
+        "trip_type": row[10] or "round_trip",
     }
 
 
@@ -144,14 +156,15 @@ def list_trips() -> dict:
         "trips": [
             {
                 "id": t["id"],
+                "trip_type": t.get("trip_type", "round_trip"),
                 "outbound_date": t["outbound_date"],
-                "return_date": t["return_date"],
+                "return_date": t.get("return_date"),
                 "budget_cny": t["budget"],
                 "best_price_cny": t.get("best_price"),
                 "depart_window": f"{t['depart_after']}:00-{t['depart_before']}:00",
-                "arrive_window": f"{t['arrive_after']}:00-{t['arrive_before']}:00",
+                "arrive_window": f"{t['arrive_after']}:00-{t['arrive_before']}:00" if t.get("trip_type") != "one_way" else None,
                 "outbound_flex_days": t.get("outbound_flex", 0),
-                "return_flex_days": t.get("return_flex", 1),
+                "return_flex_days": t.get("return_flex", 1) if t.get("trip_type") != "one_way" else None,
             }
             for t in trips
         ],
@@ -161,8 +174,9 @@ def list_trips() -> dict:
 @mcp.tool()
 def add_trip(
     outbound_date: str,
-    return_date: str,
+    return_date: str = None,
     budget: int = 1500,
+    trip_type: str = "round_trip",
     depart_start: int = 19,
     depart_end: int = 23,
     arrive_start: int = 0,
@@ -175,14 +189,15 @@ def add_trip(
 
     Args:
         outbound_date: 去程日期，格式 YYYY-MM-DD（东京出发）
-        return_date: 回程日期，格式 YYYY-MM-DD（上海出发）
-        budget: 往返预算（人民币），默认1500
+        return_date: 回程日期，格式 YYYY-MM-DD（上海出发）；单程时可不填
+        budget: 预算（人民币），往返总价或单程价，默认1500
+        trip_type: 行程类型，round_trip（往返，默认）或 one_way（单程）
         depart_start: 去程最早出发时间（0-23），默认19
         depart_end: 去程最晚出发时间（0-23），默认23
-        arrive_start: 回程最早到达时间（0-23），默认0
-        arrive_end: 回程最晚到达时间（0-23），默认6
+        arrive_start: 回程最早到达时间（0-23），默认0（单程时忽略）
+        arrive_end: 回程最晚到达时间（0-23），默认6（单程时忽略）
         outbound_flex: 去程弹性天数（向前搜索），默认0
-        return_flex: 回程弹性天数（向前搜索），默认1
+        return_flex: 回程弹性天数（向前搜索），默认1（单程时忽略）
 
     Returns:
         新行程的 ID 和详情
@@ -191,6 +206,7 @@ def add_trip(
         "outbound_date": outbound_date,
         "return_date": return_date,
         "budget": budget,
+        "trip_type": trip_type,
         "depart_start": depart_start,
         "depart_end": depart_end,
         "arrive_start": arrive_start,
@@ -201,27 +217,33 @@ def add_trip(
     if error:
         return error
 
+    is_one_way = trip_type == "one_way"
     with get_db() as db:
         c = db.cursor()
         c.execute(
-            "INSERT INTO trips (outbound_date, return_date, budget, "
+            "INSERT INTO trips (outbound_date, return_date, budget, trip_type, "
             "outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end, "
             "outbound_flex, return_flex) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (outbound_date, return_date, budget,
-             depart_start, depart_end, arrive_start, arrive_end,
-             outbound_flex, return_flex)
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (outbound_date, None if is_one_way else return_date, budget, trip_type,
+             depart_start, depart_end,
+             None if is_one_way else arrive_start,
+             None if is_one_way else arrive_end,
+             outbound_flex,
+             None if is_one_way else return_flex)
         )
         db.commit()
         new_id = c.lastrowid
 
+    type_label = "单程" if is_one_way else "往返"
     return {
         "success": True,
         "trip_id": new_id,
+        "trip_type": trip_type,
         "outbound_date": outbound_date,
-        "return_date": return_date,
+        "return_date": None if is_one_way else return_date,
         "budget_cny": budget,
-        "message": f"行程#{new_id}已添加，系统将在下次巡查时开始监控",
+        "message": f"{type_label}行程#{new_id}已添加，系统将在下次巡查时开始监控",
     }
 
 
@@ -231,6 +253,7 @@ def edit_trip(
     outbound_date: str = None,
     return_date: str = None,
     budget: int = None,
+    trip_type: str = None,
     depart_start: int = None,
     depart_end: int = None,
     arrive_start: int = None,
@@ -244,8 +267,9 @@ def edit_trip(
     Args:
         trip_id: 行程编号
         outbound_date: 新去程日期 YYYY-MM-DD
-        return_date: 新回程日期 YYYY-MM-DD
+        return_date: 新回程日期 YYYY-MM-DD（切换为单程时会被清空）
         budget: 新预算（人民币）
+        trip_type: 行程类型 round_trip 或 one_way
         depart_start: 去程最早出发时间
         depart_end: 去程最晚出发时间
         arrive_start: 回程最早到达时间
@@ -260,6 +284,8 @@ def edit_trip(
         updates["return_date"] = return_date
     if budget is not None:
         updates["budget"] = budget
+    if trip_type is not None:
+        updates["trip_type"] = trip_type
     if depart_start is not None:
         updates["outbound_depart_start"] = depart_start
     if depart_end is not None:
@@ -282,20 +308,37 @@ def edit_trip(
     if existing_trip["status"] != "active":
         return {"error": f"行程#{trip_id}不存在或不是active状态"}
 
-    error = _validate_trip_fields(
-        {
-            "outbound_date": outbound_date,
-            "return_date": return_date,
-            "budget": budget,
-            "depart_start": depart_start,
-            "depart_end": depart_end,
-            "arrive_start": arrive_start,
-            "arrive_end": arrive_end,
-            "outbound_flex": outbound_flex,
-            "return_flex": return_flex,
-        },
-        existing_trip=existing_trip,
-    )
+    # 切换为单程时，清空回程相关字段
+    effective_type = trip_type or existing_trip.get("trip_type", "round_trip")
+    if effective_type == "one_way":
+        updates["return_date"] = None
+        updates["return_arrive_start"] = None
+        updates["return_arrive_end"] = None
+        updates["return_flex"] = None
+
+    # 只把实际传入的字段放进 payload，None 表示"未传入"（由 existing_trip 回填）
+    # 注意：dict.get(key, default) 在 key 存在但值为 None 时返回 None，不返回 default
+    validate_payload = {"trip_type": effective_type}
+    if outbound_date is not None:
+        validate_payload["outbound_date"] = outbound_date
+    if return_date is not None:
+        validate_payload["return_date"] = return_date
+    if budget is not None:
+        validate_payload["budget"] = budget
+    if depart_start is not None:
+        validate_payload["depart_start"] = depart_start
+    if depart_end is not None:
+        validate_payload["depart_end"] = depart_end
+    if arrive_start is not None:
+        validate_payload["arrive_start"] = arrive_start
+    if arrive_end is not None:
+        validate_payload["arrive_end"] = arrive_end
+    if outbound_flex is not None:
+        validate_payload["outbound_flex"] = outbound_flex
+    if return_flex is not None:
+        validate_payload["return_flex"] = return_flex
+
+    error = _validate_trip_fields(validate_payload, existing_trip=existing_trip)
     if error:
         return error
 
@@ -723,8 +766,11 @@ def resource_active_trips() -> str:
     lines = []
     for t in trips:
         best = f"¥{t['best_price']:,}" if t.get("best_price") else "暂无数据"
+        is_one_way = t.get("trip_type") == "one_way"
+        type_tag = "[单程]" if is_one_way else ""
+        date_str = t["outbound_date"] if is_one_way else f"{t['outbound_date']} → {t.get('return_date', '?')}"
         lines.append(
-            f"行程#{t['id']}: {t['outbound_date']} → {t['return_date']} "
+            f"行程#{t['id']}{type_tag}: {date_str} "
             f"预算¥{t['budget']:,} 最低{best}"
         )
     return "\n".join(lines)
