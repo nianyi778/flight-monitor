@@ -633,7 +633,7 @@ async def main():
 
     trips = get_active_trips()
     log.info("=" * 55)
-    log.info("✈️ 机票价格监控系统启动 v6.0 (Docker)")
+    log.info("✈️ 机票价格监控系统启动 v6.1 (Docker)")
     log.info(f"   监控行程: {len(trips)} 个")
     log.info(f"   检查间隔: ~{CHECK_INTERVAL}s (随机抖动)")
     log.info(f"   TG通知: {'已配置' if TG_BOT_TOKEN else '⚠️ 未配置'}")
@@ -648,7 +648,7 @@ async def main():
     state["boot_count"] = boot_count
     save_state(state)
     tg_send(
-        f"🟢 *机票监控系统 v6.0 已上线* (第{boot_count}次启动)\n\n"
+        f"🟢 *机票监控系统 v6.1 已上线* (第{boot_count}次启动)\n\n"
         f"📊 监控行程: {len(get_active_trips())} 个\n"
         f"⏰ 约每 {CHECK_INTERVAL // 60} 分钟巡查（随机抖动防检测）\n\n"
         f"💡 可用命令:\n"
