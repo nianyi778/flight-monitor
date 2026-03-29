@@ -171,7 +171,7 @@ def get_google_flights_for_searches(searches, proxy_url=None, proxy_id=None):
         date_str = s.get("flight_date", "")
 
         result = make_result(
-            source=f"GoogleAPI_{origin}_{destination}",
+            source="Google Flights",
             url=url,
             flight_date=date_str,
             proxy_id=proxy_id,

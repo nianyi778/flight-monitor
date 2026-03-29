@@ -482,7 +482,7 @@ async def _run_check_inner(force, all_trips, bot_module):
                                 "price_cny": spring_best["outbound_cny"],
                                 "original_currency": "USD",
                                 "_source": "春秋官网",
-                                "_url": f"https://www.ch.com/flights/{spring_best['outbound_route'].split('→')[0].lower()}-{spring_best['outbound_route'].split('→')[-1].lower()}/",
+                                "_url": f"https://www.ch.com/flights/{spring_best['outbound_route'].split('→')[0].lower()}-{spring_best['outbound_route'].split('→')[-1].lower()}/?depDate={(spring_best['outbound_date'] or '').replace('-', '')}",
                                 "_flight_date": spring_best["outbound_date"],
                             },
                             "return": {
@@ -492,7 +492,7 @@ async def _run_check_inner(force, all_trips, bot_module):
                                 "price_cny": spring_best["return_cny"],
                                 "original_currency": "USD",
                                 "_source": "春秋官网",
-                                "_url": f"https://www.ch.com/flights/{spring_best['return_route'].split('→')[0].lower()}-{spring_best['return_route'].split('→')[-1].lower()}/",
+                                "_url": f"https://www.ch.com/flights/{spring_best['return_route'].split('→')[0].lower()}-{spring_best['return_route'].split('→')[-1].lower()}/?depDate={(spring_best['return_date'] or '').replace('-', '')}",
                                 "_flight_date": spring_best["return_date"],
                             },
                             "total": spring_best["total_cny"],

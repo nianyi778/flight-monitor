@@ -104,7 +104,7 @@ def get_kiwi_flights_for_searches(searches, proxy_url=None, proxy_id=None):
         date_str = s.get("flight_date", "")
 
         result = make_result(
-            source=f"Kiwi_{origin}_{destination}",
+            source="Kiwi",
             url=url,
             flight_date=date_str,
             proxy_id=proxy_id,
