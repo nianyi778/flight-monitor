@@ -29,7 +29,7 @@ services:
 
   flight-monitor:
     build: .
-    image: ghcr.io/nianyi778/flight-monitor:v5.4
+    image: ghcr.io/nianyi778/flight-monitor:v5.5
     container_name: flight-monitor
     restart: unless-stopped
     depends_on:
