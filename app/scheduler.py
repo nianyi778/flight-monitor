@@ -22,6 +22,7 @@ from app.db import (
     update_trip_best_price,
     save_to_db,
     already_checked_this_hour,
+    cleanup_expired_pending_trips,
 )
 from app.matcher import find_best_combinations, get_search_urls
 from app.notifier import tg_send, format_alert_message, _brief_price
@@ -262,6 +263,7 @@ async def run_check(force=False):
         log.info("⏭ 本小时已检查过，跳过（重启不重复查询）")
         return
 
+    cleanup_expired_pending_trips()
     all_trips = get_active_trips()
     if not all_trips:
         log.warning("没有 active 行程，跳过检查")
@@ -452,9 +454,11 @@ async def _run_check_inner(force, all_trips, bot_module):
                 spring_leg = spring.get(key)
                 if spring_leg and spring_leg.get("price_cny"):
                     route = spring_leg.get("route", "")
-                    parts = route.split("→") if "→" in route else ["", ""]
+                    split = route.split("→")
+                    parts = split if len(split) == 2 else ["", ""]
                     results[direction].append({
                         "source": f"春秋_{parts[0]}_{parts[1]}",
+                        "url": f"https://www.ch.com/{parts[0]}-{parts[1]}/?date={spring_leg.get('date', '')}",
                         "flight_date": spring_leg.get("date"),
                         "lowest_price": spring_leg.get("price_cny"),
                         "flights": [{
@@ -468,6 +472,7 @@ async def _run_check_inner(force, all_trips, bot_module):
                             "original_price": None,
                             "original_currency": "CNY",
                             "stops": 0,
+                            "via": "",
                         }],
                     })
 

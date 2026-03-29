@@ -56,30 +56,38 @@ docker compose logs -f
 
 ## 第五步：建表 SQL
 
-在数据库执行以下三条语句（首次部署执行一次即可）：
+### 全新部署（首次执行）
 
 ```sql
+-- v6.0 完整建表
 CREATE TABLE trips (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    origin VARCHAR(5) NOT NULL DEFAULT 'TYO',       -- 出发地机场/城市代码
+    destination VARCHAR(5) NOT NULL DEFAULT 'PVG',   -- 目的地机场/城市代码
     outbound_date DATE NOT NULL,
-    return_date DATE,                          -- 单程行程时为 NULL
+    return_date DATE,                                -- 单程时为 NULL
     budget INT NOT NULL DEFAULT 1500,
-    trip_type VARCHAR(10) DEFAULT 'round_trip', -- round_trip | one_way
-    status VARCHAR(10) DEFAULT 'active',
+    trip_type VARCHAR(10) DEFAULT 'round_trip',      -- round_trip | one_way
+    status VARCHAR(10) DEFAULT 'active',             -- active | paused | deleted | pending
     best_price INT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    outbound_depart_start INT DEFAULT 19,
-    outbound_depart_end INT DEFAULT 23,
-    return_arrive_start INT DEFAULT 0,         -- 单程时为 NULL
-    return_arrive_end INT DEFAULT 6,           -- 单程时为 NULL
-    outbound_flex INT DEFAULT 0,
-    return_flex INT DEFAULT 1,                 -- 单程时为 NULL
+    expires_at DATETIME,                             -- pending 行程超时自动清理
+    -- 去程时间窗（NULL = 不过滤该维度）
+    ob_depart_start INT,
+    ob_depart_end INT,
+    ob_arrive_start INT,
+    ob_arrive_end INT,
+    -- 回程时间窗（单程时均为 NULL）
+    rt_depart_start INT,
+    rt_depart_end INT,
+    rt_arrive_start INT,
+    rt_arrive_end INT,
+    ob_flex INT DEFAULT 0,
+    rt_flex INT,                                     -- 单程时为 NULL
+    max_stops INT,                                   -- NULL=不限, 0=直飞, 1=最多1转
+    throwaway TINYINT(1) DEFAULT 0,                  -- 1=启用甩尾票监控
     INDEX idx_status (status)
 );
-
--- 已有数据库迁移（旧版升级执行一次）：
--- ALTER TABLE trips MODIFY COLUMN return_date DATE NULL;
--- ALTER TABLE trips ADD COLUMN trip_type VARCHAR(10) DEFAULT 'round_trip' AFTER budget;
 
 CREATE TABLE flight_prices (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -98,6 +106,7 @@ CREATE TABLE flight_prices (
     original_currency VARCHAR(5) DEFAULT 'CNY',
     stops INT DEFAULT 0,
     flight_date DATE NOT NULL,
+    via VARCHAR(50),                                 -- 中转机场 IATA，逗号分隔
     INDEX idx_check_time (check_time),
     INDEX idx_trip (trip_id),
     INDEX idx_price (price_cny),
@@ -119,6 +128,51 @@ CREATE TABLE check_summary (
 );
 ```
 
+### 升级迁移（v5.x → v6.0，已有数据库执行）
+
+```sql
+-- Step 1: 新增列
+ALTER TABLE trips
+    ADD COLUMN origin VARCHAR(5) NOT NULL DEFAULT 'TYO' AFTER id,
+    ADD COLUMN destination VARCHAR(5) NOT NULL DEFAULT 'PVG' AFTER origin,
+    ADD COLUMN expires_at DATETIME AFTER created_at,
+    ADD COLUMN ob_depart_start INT AFTER expires_at,
+    ADD COLUMN ob_depart_end INT AFTER ob_depart_start,
+    ADD COLUMN ob_arrive_start INT AFTER ob_depart_end,
+    ADD COLUMN ob_arrive_end INT AFTER ob_arrive_start,
+    ADD COLUMN rt_depart_start INT AFTER ob_arrive_end,
+    ADD COLUMN rt_depart_end INT AFTER rt_depart_start,
+    ADD COLUMN rt_arrive_start INT AFTER rt_depart_end,
+    ADD COLUMN rt_arrive_end INT AFTER rt_arrive_start,
+    ADD COLUMN ob_flex INT DEFAULT 0 AFTER rt_arrive_end,
+    ADD COLUMN rt_flex INT AFTER ob_flex,
+    ADD COLUMN max_stops INT AFTER rt_flex,
+    ADD COLUMN throwaway TINYINT(1) DEFAULT 0 AFTER max_stops;
+
+-- Step 2: 迁移旧数据（将旧列值复制到新列）
+UPDATE trips SET
+    ob_depart_start = outbound_depart_start,
+    ob_depart_end   = outbound_depart_end,
+    rt_arrive_start = return_arrive_start,
+    rt_arrive_end   = return_arrive_end,
+    ob_flex         = COALESCE(outbound_flex, 0),
+    rt_flex         = return_flex,
+    max_stops       = CASE WHEN direct_only = 1 THEN 0 ELSE NULL END;
+
+-- Step 3: 新增 via 列到 flight_prices
+ALTER TABLE flight_prices ADD COLUMN via VARCHAR(50) AFTER flight_date;
+
+-- Step 4: （可选）删除已废弃旧列（确认新版正常运行后再执行）
+-- ALTER TABLE trips
+--     DROP COLUMN outbound_depart_start,
+--     DROP COLUMN outbound_depart_end,
+--     DROP COLUMN return_arrive_start,
+--     DROP COLUMN return_arrive_end,
+--     DROP COLUMN outbound_flex,
+--     DROP COLUMN return_flex,
+--     DROP COLUMN direct_only;
+```
+
 ## 第六步：添加监控行程
 
 容器启动后，在 Telegram 与 Bot 对话：
@@ -127,8 +181,11 @@ CREATE TABLE check_summary (
 # 查看帮助
 /help
 
-# 添加行程：去程日期 回程日期 预算 去程时间窗口 回程时间窗口
-/trip add 2026-09-18 2026-09-28 1500 去19-23 回0-6
+# 添加行程（v6）：出发地 目的地 去程日期 回程日期 预算 时间窗口 经停要求
+/trip add TYO PVG 2026-09-18 2026-09-28 1500 ob-dep 19-23 rt-arr 0-6
+/trip add NRT SHA 2026-09-18 单程 800 ob-dep 19-23 直飞
+/trip add PVG TYO 2026-09-18 2026-09-28        (往返，默认¥1500，不限时间)
+/trip add TYO PVG 2026-09-18 2026-09-28 甩尾   (启用甩尾票监控)
 
 # 立即触发一次查价（验证配置是否正确）
 /check
@@ -136,7 +193,7 @@ CREATE TABLE check_summary (
 # 查看系统状态
 /status
 
-# 查看健康状态（LLM / DB / 代理 / TG 连通性）
+# 查看健康状态（DB / 代理 / TG 连通性）
 /health
 ```
 

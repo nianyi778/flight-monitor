@@ -193,9 +193,9 @@ def get_spring_price_for_trip(trip, proxy_url=None, proxy_id=None):
 
     # 搜索所有机场组合，取最便宜的
     # 去程: NRT→PVG, NRT→SHA, HND→PVG, HND→SHA
-    ob_routes = [("NRT", "PVG"), ("NRT", "SHA"), ("HND", "PVG"), ("HND", "SHA")]
-    # 回程: PVG→NRT, SHA→NRT, PVG→HND, SHA→HND
-    rt_routes = [("PVG", "NRT"), ("SHA", "NRT"), ("PVG", "HND"), ("SHA", "HND")]
+    from app.airports import get_route_pairs
+    ob_routes = get_route_pairs(trip.get("origin", "TYO"), trip.get("destination", "PVG"))
+    rt_routes = [(d, o) for o, d in ob_routes]
 
     all_ob = {}  # {(date, origin, dest): price_cny}
     all_rt = {}
@@ -272,6 +272,8 @@ def get_spring_price_for_trip(trip, proxy_url=None, proxy_id=None):
                             **prices[flex_date],
                         }
             else:
+                if rt_date is None:
+                    continue
                 if rt_date in prices:
                     key = (rt_date, origin, dest)
                     all_rt[key] = prices[rt_date]["price_cny"]

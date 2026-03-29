@@ -72,10 +72,13 @@ def format_alert_message(combos, results, trip=None):
     trip_id = trip["id"] if trip else "?"
     is_one_way = (trip.get("trip_type") == "one_way") if trip else False
 
+    origin = trip.get("origin", "TYO") if trip else "TYO"
+    destination = trip.get("destination", "PVG") if trip else "PVG"
+
     lines = [f"✈️ *机票价格更新* ({ts}) 行程#{trip_id}\n"]
-    lines.append(f"📅 去程: {ob_date} 东京→上海")
+    lines.append(f"📅 去程: {ob_date} {origin}→{destination}")
     if not is_one_way and rt_date:
-        lines.append(f"📅 回程: {rt_date} 上海→东京")
+        lines.append(f"📅 回程: {rt_date} {destination}→{origin}")
     type_label = "单程" if is_one_way else "往返"
     lines.append(f"💰 预算: ¥{budget}(CNY) {type_label}\n")
 
@@ -94,6 +97,10 @@ def format_alert_message(combos, results, trip=None):
         if not is_one_way and rt:
             lines.append(f"*回程* {rt.get('airline', '')} {rt.get('flight_no', '')}")
             lines.append(f"  {rt.get('departure_time', '')}→{rt.get('arrival_time', '')} {_price_str(rt)} ({rt.get('_source', '')})")
+
+        if best.get("throwaway"):
+            via = ob.get("via", "")
+            lines.append(f"\n🎫 *甩尾票提示*: 含经停 {via or destination}，实际目的地 {via or destination}，后段可不乘坐")
 
         lines.append(f"\n🔗 *购买链接:*")
         lines.append(f"去程: {ob.get('_url', '')}")
