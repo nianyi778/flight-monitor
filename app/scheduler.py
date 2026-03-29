@@ -452,7 +452,8 @@ async def _run_check_inner(force, all_trips, bot_module):
                 spring_leg = spring.get(key)
                 if spring_leg and spring_leg.get("price_cny"):
                     route = spring_leg.get("route", "")
-                    parts = route.split("→") if "→" in route else ["", ""]
+                    split = route.split("→")
+                    parts = split if len(split) == 2 else ["", ""]
                     results[direction].append({
                         "source": f"春秋_{parts[0]}_{parts[1]}",
                         "url": f"https://www.ch.com/{parts[0]}-{parts[1]}/?date={spring_leg.get('date', '')}",

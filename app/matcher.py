@@ -124,7 +124,7 @@ def find_best_combinations(results, trip):
         # 单程：每个去程航班单独成为一个 combo，total = 去程价格
         combos = []
         for ob in outbound_flights[:10]:
-            if not ob.get("price_cny"):
+            if ob.get("price_cny") is None:
                 continue
             total = ob["price_cny"]
             combos.append({
@@ -144,7 +144,7 @@ def find_best_combinations(results, trip):
                 continue
             f["_source"] = src["source"]
             f["_url"] = src.get("url", "")
-            f["_flight_date"] = src.get("flight_date", trip["return_date"])
+            f["_flight_date"] = src.get("flight_date", trip.get("return_date"))
             return_flights.append(f)
 
     return_flights.sort(key=lambda x: x.get("price_cny", 99999))

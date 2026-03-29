@@ -272,6 +272,8 @@ def get_spring_price_for_trip(trip, proxy_url=None, proxy_id=None):
                             **prices[flex_date],
                         }
             else:
+                if rt_date is None:
+                    continue
                 if rt_date in prices:
                     key = (rt_date, origin, dest)
                     all_rt[key] = prices[rt_date]["price_cny"]
