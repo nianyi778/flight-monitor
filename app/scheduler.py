@@ -49,18 +49,34 @@ from app.source_runtime import (
 shutdown_event = asyncio.Event()
 
 
+def _make_spring_url(date_str: str, orig: str, dest: str) -> str:
+    """构造春秋官网搜索 URL（flights.ch.com 要求日期去前导零，如 2026-4-20）。"""
+    parts = (date_str or "").split("-")
+    if len(parts) != 3:
+        return ""
+    try:
+        date_no_lz = f"{parts[0]}-{int(parts[1])}-{int(parts[2])}"
+    except ValueError:
+        return ""
+    return (
+        f"https://flights.ch.com/{orig.upper()}-{dest.upper()}.html"
+        f"?Mtype=0&SType=0&IfRet=false&FDate={date_no_lz}&ActId=&IsNew=1"
+    )
+
+
 def handle_signal(sig, frame):
     log.info(f"收到信号 {sig}，准备优雅关闭...")
     shutdown_event.set()
 
 
-async def push_until_ack(msg):
-    """每分钟推送直到确认（通过 bot listener 的 ack_received_event）"""
+async def push_until_ack(msg, state):
+    """每分钟推送直到确认（通过 bot listener 的 ack_received_event）。
+    state 由调用方传入，避免独立 load_state() 导致的 pending_ack 竞态覆盖。
+    """
     from app.bot import ack_received_event
 
     ack_received_event.clear()
     push_count = 1
-    state = load_state()
 
     while not shutdown_event.is_set():
         # 等待 PUSH_INTERVAL 秒，期间如果收到确认立即停止
@@ -180,10 +196,6 @@ def _record_results_for_source(state, source_name, results, searches):
         elif action == "switch_proxy":
             penalize_proxy(
                 state, result.get("proxy_id"), source_name, now_dt, hard=True
-            )
-        elif action == "skip_browser" and source_name == "browser_fallback":
-            mark_skip_browser_until(
-                state, now_dt, diagnosis.get("retry_after_seconds") or 1800
             )
         elif action == "raise_alert":
             state.setdefault("runtime_alerts", []).append(
@@ -331,8 +343,9 @@ async def _run_check_inner(force, all_trips, bot_module):
         all_analysis.update(cached)
         if not source_in_cooldown(state, "kiwi_api", now_jst()) and remaining:
             proxy = choose_proxy(state, "kiwi_api", now_jst())
-            fetched = get_kiwi_flights_for_searches(
-                remaining, proxy_url=proxy.get("url"), proxy_id=proxy.get("id")
+            fetched = await asyncio.to_thread(
+                get_kiwi_flights_for_searches,
+                remaining, proxy_url=proxy.get("url"), proxy_id=proxy.get("id"),
             )
             all_analysis.update(fetched)
             _record_results_for_source(state, "kiwi_api", fetched, remaining)
@@ -345,8 +358,9 @@ async def _run_check_inner(force, all_trips, bot_module):
         all_analysis.update(cached)
         if not source_in_cooldown(state, "google_api", now_jst()) and remaining:
             proxy = choose_proxy(state, "google_api", now_jst())
-            fetched = get_google_flights_for_searches(
-                remaining, proxy_url=proxy.get("url"), proxy_id=proxy.get("id")
+            fetched = await asyncio.to_thread(
+                get_google_flights_for_searches,
+                remaining, proxy_url=proxy.get("url"), proxy_id=proxy.get("id"),
             )
             all_analysis.update(fetched)
             _record_results_for_source(state, "google_api", fetched, remaining)
@@ -414,8 +428,9 @@ async def _run_check_inner(force, all_trips, bot_module):
             from app.spring_api import get_spring_price_for_trip
 
             spring_proxy = choose_proxy(state, "spring_api", now_jst())
-            spring = get_spring_price_for_trip(
-                trip, proxy_url=spring_proxy.get("url"), proxy_id=spring_proxy.get("id")
+            spring = await asyncio.to_thread(
+                get_spring_price_for_trip,
+                trip, proxy_url=spring_proxy.get("url"), proxy_id=spring_proxy.get("id"),
             )
             record_source_outcome(
                 state,
@@ -441,12 +456,9 @@ async def _run_check_inner(force, all_trips, bot_module):
                     route = spring_leg.get("route", "")
                     split = route.split("→")
                     parts = split if len(split) == 2 else ["", ""]
-                    _sd = spring_leg.get("date") or ""
-                    _sd_parts = _sd.split("-")
-                    _sd_nolz = f"{_sd_parts[0]}-{int(_sd_parts[1])}-{int(_sd_parts[2])}" if len(_sd_parts) == 3 else _sd
                     results[direction].append({
                         "source": f"春秋{parts[0]}{parts[1]}",
-                        "url": f"https://flights.ch.com/{parts[0].upper()}-{parts[1].upper()}.html?Mtype=0&SType=0&IfRet=false&FDate={_sd_nolz}&ActId=&IsNew=1",
+                        "url": _make_spring_url(spring_leg.get("date") or "", parts[0], parts[1]),
                         "flight_date": spring_leg.get("date"),
                         "lowest_price": spring_leg.get("price_cny"),
                         "flights": [{
@@ -484,7 +496,7 @@ async def _run_check_inner(force, all_trips, bot_module):
                                 "price_cny": spring_best["outbound_cny"],
                                 "original_currency": "USD",
                                 "_source": "春秋官网",
-                                "_url": (lambda d, r: f"https://flights.ch.com/{r.split('→')[0].upper()}-{r.split('→')[-1].upper()}.html?Mtype=0&SType=0&IfRet=false&FDate={d.split('-')[0]}-{int(d.split('-')[1])}-{int(d.split('-')[2])}&ActId=&IsNew=1" if d and len(d.split('-'))==3 else "")(spring_best['outbound_date'] or '', spring_best['outbound_route']),
+                                "_url": _make_spring_url(spring_best['outbound_date'] or '', *spring_best['outbound_route'].split('→')),
                                 "_flight_date": spring_best["outbound_date"],
                             },
                             "return": {
@@ -494,7 +506,7 @@ async def _run_check_inner(force, all_trips, bot_module):
                                 "price_cny": spring_best["return_cny"],
                                 "original_currency": "USD",
                                 "_source": "春秋官网",
-                                "_url": (lambda d, r: f"https://flights.ch.com/{r.split('→')[0].upper()}-{r.split('→')[-1].upper()}.html?Mtype=0&SType=0&IfRet=false&FDate={d.split('-')[0]}-{int(d.split('-')[1])}-{int(d.split('-')[2])}&ActId=&IsNew=1" if d and len(d.split('-'))==3 else "")(spring_best['return_date'] or '', spring_best['return_route']),
+                                "_url": _make_spring_url(spring_best['return_date'] or '', *spring_best['return_route'].split('→')),
                                 "_flight_date": spring_best["return_date"],
                             },
                             "total": spring_best["total_cny"],
@@ -519,14 +531,14 @@ async def _run_check_inner(force, all_trips, bot_module):
                 msg = format_alert_message(combos, results, trip)
                 log.info(f"\n{msg}")
                 tg_send(msg)
-                s = load_state()
-                s["pending_ack"] = True
-                s["last_alert_msg"] = msg
-                save_state(s)
+                # 使用同一个 state dict，避免独立 load/save 相互覆盖 pending_ack
+                state["pending_ack"] = True
+                state["last_alert_msg"] = msg
+                save_state(state)
                 # 检查已完成，在等待用户确认期间放开 checking_in_progress
                 # 否则"立即查价"按钮会永远显示"查价中"直到用户发送"确认收到"
                 bot_module.checking_in_progress = False
-                await push_until_ack(msg)
+                await push_until_ack(msg, state)
             else:
                 trend = ""
                 if prev_best and best_total:
@@ -658,7 +670,7 @@ async def main():
     # 首次检查是否有未确认的通知（重启后继续推送）
     if state.get("pending_ack") and state.get("last_alert_msg"):
         log.info("发现未确认的通知，继续推送...")
-        await push_until_ack(state["last_alert_msg"])
+        await push_until_ack(state["last_alert_msg"], state)
 
     # 主循环
     is_force = False

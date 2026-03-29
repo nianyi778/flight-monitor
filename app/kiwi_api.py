@@ -89,24 +89,9 @@ def _run_kiwi(origin: str, destination: str, date_str: str) -> list[dict]:
         finally:
             await client.close()
 
-    try:
-        asyncio.get_running_loop()
-        # 已在异步上下文（scheduler）中，asyncio.run() 会报错，改用线程+新 loop
-        import concurrent.futures
-
-        def _in_thread():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                return loop.run_until_complete(_search())
-            finally:
-                loop.close()
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-            return ex.submit(_in_thread).result(timeout=_KIWI_TIMEOUT + 5)
-    except RuntimeError:
-        # 无运行中的 loop（本地测试场景），直接 run
-        return asyncio.run(_search())
+    # _run_kiwi 总是从同步上下文调用（由 scheduler 通过 asyncio.to_thread 派发）
+    # 直接 run，无需检测嵌套 loop
+    return asyncio.run(_search())
 
 
 def get_kiwi_flights_for_searches(searches, proxy_url=None, proxy_id=None):
