@@ -455,6 +455,7 @@ async def _run_check_inner(force, all_trips, bot_module):
                     parts = route.split("→") if "→" in route else ["", ""]
                     results[direction].append({
                         "source": f"春秋_{parts[0]}_{parts[1]}",
+                        "url": f"https://www.ch.com/{parts[0]}-{parts[1]}/?date={spring_leg.get('date', '')}",
                         "flight_date": spring_leg.get("date"),
                         "lowest_price": spring_leg.get("price_cny"),
                         "flights": [{
