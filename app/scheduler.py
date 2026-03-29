@@ -622,11 +622,14 @@ async def _run_check_inner(force, all_trips, bot_module):
         finalized_metrics.get("duration_ms"),
     )
 
+    # 保存前同步 last_tg_update_id：tg_command_listener 可能在本轮检查期间
+    # 已将其推进，如果直接保存 state 会用检查开始时的旧值覆盖它
+    _disk = load_state()
+    state["last_tg_update_id"] = _disk.get("last_tg_update_id", state.get("last_tg_update_id", 0))
     save_state(state)
 
     # 发送汇总简报
-    s = load_state()
-    if not s.get("pending_ack") and len(brief_lines) > 1:
+    if not state.get("pending_ack") and len(brief_lines) > 1:
         tg_send("\n\n".join(brief_lines))
 
 

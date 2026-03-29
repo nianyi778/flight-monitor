@@ -419,19 +419,6 @@ def _validate_date_pair(ob_d, rt_d):
     return (ob_d, rt_d), None
 
 
-def _parse_window_arg(raw, prefix, label):
-    if not raw.startswith(prefix):
-        return None, f"❌ {label}格式错误，应为 `{prefix}HH-HH`"
-    try:
-        start, end = [int(x) for x in raw.replace(prefix, "").split("-")]
-    except Exception:
-        return None, f"❌ {label}格式错误，应为 `{prefix}HH-HH`"
-    if not (0 <= start <= 23 and 0 <= end <= 23):
-        return None, f"❌ {label}超出范围 (0-23)"
-    if start > end:
-        return None, f"❌ {label}起始应小于等于结束"
-    return (start, end), None
-
 
 def _parse_flex_arg(raw, prefix, label):
     if not raw.startswith(prefix):
@@ -1139,9 +1126,13 @@ async def tg_command_listener():
                     ack_received_event.set()
                     log.info("📨 收到确认回复（via bot listener）")
 
-            state = load_state()
-            state["last_tg_update_id"] = last_update_id
-            save_state(state)
+            # 仅在有新 update 时才持久化，减少无效写入，
+            # 并始终在 load_state() 基础上写入，避免覆盖
+            # _run_check_inner 正在处理过程中写入的 check/ack 状态。
+            if updates:
+                _s = load_state()
+                _s["last_tg_update_id"] = last_update_id
+                save_state(_s)
 
         except asyncio.CancelledError:
             break
