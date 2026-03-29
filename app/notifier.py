@@ -99,8 +99,11 @@ def format_alert_message(combos, results, trip=None):
             lines.append(f"  {rt.get('departure_time', '')}→{rt.get('arrival_time', '')} {_price_str(rt)} ({rt.get('_source', '')})")
 
         if best.get("throwaway"):
-            via = ob.get("via", "")
-            lines.append(f"\n🎫 *甩尾票提示*: 含经停 {via or destination}，实际目的地 {via or destination}，后段可不乘坐")
+            via = ob.get("via", "") or destination
+            lines.append(
+                f"\n🎫 *甩尾票提示*: 购买 {origin}→终点 的机票，"
+                f"在 *{via}* 下机即可，无需乘坐后续航段"
+            )
 
         lines.append(f"\n🔗 *购买链接:*")
         lines.append(f"去程: {ob.get('_url', '')}")

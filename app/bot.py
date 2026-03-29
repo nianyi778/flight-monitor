@@ -862,9 +862,12 @@ def _handle_callback(callback_id, data, message_id):
         tid = data.split("_")[-1]
         tg_answer_callback(callback_id)
         tg_send(
-            f"⏰ 修改时间窗口，请输入：\n\n"
-            f"`/trip time {tid} 去HH-HH 回HH-HH`\n\n"
-            f"例: `/trip time {tid} 去19-23 回0-6`"
+            f"⏰ 修改时间窗口，请输入（可组合任意窗口）：\n\n"
+            f"`/trip time {tid} ob-dep HH-HH`  去程出发\n"
+            f"`/trip time {tid} ob-arr HH-HH`  去程到达\n"
+            f"`/trip time {tid} rt-dep HH-HH`  回程出发\n"
+            f"`/trip time {tid} rt-arr HH-HH`  回程到达\n\n"
+            f"例: `/trip time {tid} ob-dep 19-23 rt-arr 0-6`"
         )
 
     else:
@@ -1044,33 +1047,63 @@ async def tg_command_listener():
                         tg_send("格式: `/trip flex 编号 去N 回N`\n例: `/trip flex 1 去0 回1`")
                 elif text.startswith("/trip time"):
                     parts = text.split()
-                    if len(parts) >= 5:
+                    if len(parts) >= 4:
                         try:
                             tid = int(parts[2])
-                            ob_window, error = _parse_window_arg(parts[3], "去", "去程时间")
-                            if error:
-                                tg_send(error)
+                            tokens = parts[3:]
+                            windows = {}
+                            key_map = {
+                                "ob-dep": ("ob_depart_start", "ob_depart_end"),
+                                "ob-arr": ("ob_arrive_start", "ob_arrive_end"),
+                                "rt-dep": ("rt_depart_start", "rt_depart_end"),
+                                "rt-arr": ("rt_arrive_start", "rt_arrive_end"),
+                            }
+                            err = None
+                            i = 0
+                            while i < len(tokens):
+                                tok = tokens[i]
+                                if tok in key_map:
+                                    if i + 1 >= len(tokens):
+                                        err = f"❌ {tok} 后面需要时间范围，如 `{tok} 19-23`"
+                                        break
+                                    try:
+                                        s, e = [int(x) for x in tokens[i + 1].split("-")]
+                                        if not (0 <= s <= 23 and 0 <= e <= 23 and s <= e):
+                                            err = f"❌ {tok} 时间范围无效 (0-23，起始≤结束)"
+                                            break
+                                        windows[tok] = (s, e)
+                                        i += 2
+                                    except Exception:
+                                        err = f"❌ {tok} 格式错误，应为 `{tok} HH-HH`"
+                                        break
+                                else:
+                                    err = f"❌ 未知参数 `{tok}`，支持: ob-dep ob-arr rt-dep rt-arr"
+                                    break
+                            if err:
+                                tg_send(err)
                                 continue
-                            rt_window, error = _parse_window_arg(parts[4], "回", "回程时间")
-                            if error:
-                                tg_send(error)
+                            if not windows:
+                                tg_send("格式: `/trip time 编号 ob-dep HH-HH [ob-arr HH-HH] [rt-dep HH-HH] [rt-arr HH-HH]`")
                                 continue
-                            ob_s, ob_e = ob_window
-                            rt_s, rt_e = rt_window
+                            set_parts, vals = [], []
+                            for key, (col_s, col_e) in key_map.items():
+                                if key in windows:
+                                    set_parts += [f"{col_s}=%s", f"{col_e}=%s"]
+                                    vals += list(windows[key])
+                            vals.append(tid)
                             with get_db() as db:
                                 c = db.cursor()
-                                c.execute(
-                                    "UPDATE trips SET ob_depart_start=%s, ob_depart_end=%s, "
-                                    "rt_arrive_start=%s, rt_arrive_end=%s WHERE id=%s",
-                                    (ob_s, ob_e, rt_s, rt_e, tid))
+                                c.execute(f"UPDATE trips SET {', '.join(set_parts)} WHERE id=%s", vals)
                                 db.commit()
-                            tg_send(f"⏰ 行程 #{tid} 时间已更新\n🛫 去程{ob_s}-{ob_e}点 🛬 回程{rt_s}-{rt_e}点")
+                            labels = {"ob-dep": "去出发", "ob-arr": "去到达", "rt-dep": "回出发", "rt-arr": "回到达"}
+                            summary = "  ".join(f"{labels[k]}: {v[0]}-{v[1]}点" for k, v in windows.items())
+                            tg_send(f"⏰ 行程 #{tid} 时间窗已更新\n{summary}")
                         except ValueError:
                             tg_send("❌ 编号必须是整数")
                         except Exception as e:
                             tg_send(f"❌ {e}")
                     else:
-                        tg_send("格式: `/trip time 编号 去HH-HH 回HH-HH`")
+                        tg_send("格式: `/trip time 编号 ob-dep HH-HH [ob-arr HH-HH] [rt-dep HH-HH] [rt-arr HH-HH]`")
                 elif text == "/help":
                     _handle_help()
                 elif ACK_KEYWORD in text:
