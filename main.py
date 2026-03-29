@@ -13,10 +13,10 @@ import threading
 
 
 def run_mcp_server():
-    """在独立线程中运行 MCP SSE Server"""
+    """在独立线程中运行 MCP Server (streamable-http)"""
     from app.mcp_server import mcp
     port = int(os.getenv("MCP_PORT") or "8081")
-    mcp.run(transport="sse", host="0.0.0.0", port=port)
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
 
 
 async def run_main():
