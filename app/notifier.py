@@ -91,11 +91,13 @@ def format_alert_message(combos, results, trip=None):
         lines.append(f"{emoji} *最优{'单程' if is_one_way else '组合'}: ¥{best['total']}*")
         lines.append(f"{'✅ 低于预算!' if best['within_budget'] else '⚠️ 超出预算'}\n")
 
-        lines.append(f"*去程* {ob.get('airline', '')} {ob.get('flight_no', '')}")
+        ob_airline = ob.get('airline') or ob.get('_source') or '未知航司'
+        lines.append(f"*去程* {ob_airline} {ob.get('flight_no', '')}")
         lines.append(f"  {ob.get('departure_time', '')}→{ob.get('arrival_time', '')} {_price_str(ob)} ({ob.get('_source', '')})")
 
         if not is_one_way and rt:
-            lines.append(f"*回程* {rt.get('airline', '')} {rt.get('flight_no', '')}")
+            rt_airline = rt.get('airline') or rt.get('_source') or '未知航司'
+            lines.append(f"*回程* {rt_airline} {rt.get('flight_no', '')}")
             lines.append(f"  {rt.get('departure_time', '')}→{rt.get('arrival_time', '')} {_price_str(rt)} ({rt.get('_source', '')})")
 
         if best.get("throwaway"):
@@ -118,13 +120,13 @@ def format_alert_message(combos, results, trip=None):
                 if is_one_way or not r:
                     lines.append(
                         f"{i}. ¥{c['total']} | "
-                        f"{o.get('airline', '?')} {o.get('departure_time', '')}"
+                        f"{o.get('airline') or o.get('_source') or '?'} {o.get('departure_time', '')}"
                     )
                 else:
                     lines.append(
                         f"{i}. ¥{c['total']} | "
-                        f"{o.get('airline', '?')} {o.get('departure_time', '')} + "
-                        f"{r.get('airline', '?')} {r.get('departure_time', '')}"
+                        f"{o.get('airline') or o.get('_source') or '?'} {o.get('departure_time', '')} + "
+                        f"{r.get('airline') or r.get('_source') or '?'} {r.get('departure_time', '')}"
                     )
     else:
         lines.append("⚠️ 未能找到符合时间要求的航班\n")

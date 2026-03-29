@@ -444,7 +444,7 @@ async def _run_check_inner(force, all_trips, bot_module):
                     date_nodash = (spring_leg.get("date") or "").replace("-", "")
                     results[direction].append({
                         "source": f"春秋{parts[0]}{parts[1]}",
-                        "url": f"https://www.ch.com/flights/{parts[0].lower()}-{parts[1].lower()}/",
+                        "url": f"https://www.ch.com/flights/{parts[0].lower()}-{parts[1].lower()}/?depDate={date_nodash}",
                         "flight_date": spring_leg.get("date"),
                         "lowest_price": spring_leg.get("price_cny"),
                         "flights": [{

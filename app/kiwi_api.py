@@ -119,6 +119,10 @@ def get_kiwi_flights_for_searches(searches, proxy_url=None, proxy_id=None):
             results[url] = result
             continue
 
+        # 用真实的 Kiwi 搜索页作为购买链接（原始 kiwi:// 是伪协议，用户无法访问）
+        kiwi_search_url = f"https://www.kiwi.com/en/search/results/{origin}/{destination}/{date_str}"
+        result["url"] = kiwi_search_url
+
         try:
             offers = _run_kiwi(origin, destination, date_str)
             flights = _parse_offers(offers, origin, destination)
