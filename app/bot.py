@@ -801,18 +801,23 @@ def _handle_callback(callback_id, data, message_id):
         try:
             with get_db() as db:
                 c = db.cursor()
-                c.execute("SELECT outbound_date, return_date, budget, outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end, outbound_flex, return_flex FROM trips WHERE id=%s", (tid,))
+                c.execute(
+                    "SELECT outbound_date, return_date, budget, "
+                    "ob_depart_start, ob_depart_end, ob_arrive_start, ob_arrive_end, "
+                    "rt_depart_start, rt_depart_end, rt_arrive_start, rt_arrive_end, "
+                    "ob_flex, rt_flex FROM trips WHERE id=%s", (tid,))
                 r = c.fetchone()
             if r:
-                ob_flex = r[7] or 0
-                rt_flex = r[8] if r[8] is not None else 1
+                ob_flex = r[11] or 0
+                rt_flex = r[12] if r[12] is not None else 1
+                def _fmt_win(s, e): return f"`{s}-{e}点`" if s is not None else "`不限`"
                 tg_send_with_buttons(
                     f"✏️ *编辑行程 #{tid}*\n\n"
                     f"📅 去程: `{r[0]}` (弹性±{ob_flex}天)\n"
                     f"📅 回程: `{r[1]}` (弹性±{rt_flex}天)\n"
                     f"💰 预算: `¥{r[2]:,}`\n"
-                    f"🛫 去程出发: `{r[3]}-{r[4]}点`\n"
-                    f"🛬 回程到达: `{r[5]}-{r[6]}点`\n\n"
+                    f"🛫 去程出发: {_fmt_win(r[3], r[4])}  到达: {_fmt_win(r[5], r[6])}\n"
+                    f"🛬 回程出发: {_fmt_win(r[7], r[8])}  到达: {_fmt_win(r[9], r[10])}\n\n"
                     f"点击要修改的项目：",
                     [
                         [{"text": "📅 改日期", "callback_data": f"trip_date_guide_{tid}"},
@@ -1027,7 +1032,7 @@ async def tg_command_listener():
                                 continue
                             with get_db() as db:
                                 c = db.cursor()
-                                c.execute("UPDATE trips SET outbound_flex=%s, return_flex=%s WHERE id=%s",
+                                c.execute("UPDATE trips SET ob_flex=%s, rt_flex=%s WHERE id=%s",
                                           (ob_flex, rt_flex, tid))
                                 db.commit()
                             tg_send(f"📆 行程 #{tid} 弹性已更新\n去程±{ob_flex}天 回程±{rt_flex}天")
@@ -1055,8 +1060,8 @@ async def tg_command_listener():
                             with get_db() as db:
                                 c = db.cursor()
                                 c.execute(
-                                    "UPDATE trips SET outbound_depart_start=%s, outbound_depart_end=%s, "
-                                    "return_arrive_start=%s, return_arrive_end=%s WHERE id=%s",
+                                    "UPDATE trips SET ob_depart_start=%s, ob_depart_end=%s, "
+                                    "rt_arrive_start=%s, rt_arrive_end=%s WHERE id=%s",
                                     (ob_s, ob_e, rt_s, rt_e, tid))
                                 db.commit()
                             tg_send(f"⏰ 行程 #{tid} 时间已更新\n🛫 去程{ob_s}-{ob_e}点 🛬 回程{rt_s}-{rt_e}点")
