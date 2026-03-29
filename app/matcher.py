@@ -16,6 +16,17 @@ def _parse_hour(value):
         return None
 
 
+def _in_time_window(hour, start, end):
+    """判断 hour 是否在 [start, end] 窗口内，支持跨夜（end < start）。
+    - 正常窗口（start <= end）：19-23 → hour ∈ [19, 23]
+    - 跨夜窗口（end < start）：22-2  → hour >= 22 OR hour <= 2
+    """
+    if start <= end:
+        return start <= hour <= end
+    else:
+        return hour >= start or hour <= end
+
+
 def _date_range(base_date_str, flex_days, direction="before"):
     """生成日期列表：base_date 向前(before)或向后(after) flex_days 天"""
     base = datetime.strptime(base_date_str, "%Y-%m-%d").date()
@@ -50,11 +61,11 @@ def _flight_passes_filters(f, depart_start, depart_end, arrive_start, arrive_end
     arr_hour = _parse_hour(f.get("arrival_time"))
 
     if dep_hour is not None and depart_start is not None and depart_end is not None:
-        if not (depart_start <= dep_hour <= depart_end):
+        if not _in_time_window(dep_hour, depart_start, depart_end):
             return False
 
     if arr_hour is not None and arrive_start is not None and arrive_end is not None:
-        if not (arrive_start <= arr_hour <= arrive_end):
+        if not _in_time_window(arr_hour, arrive_start, arrive_end):
             return False
 
     if max_stops is not None and f.get("stops") is not None:

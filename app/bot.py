@@ -318,8 +318,10 @@ def _validate_trip_input(text):
             time_val = remaining[idx + 1]
             try:
                 s, e = [int(x) for x in time_val.split("-")]
-                if not (0 <= s <= 23 and 0 <= e <= 23 and s <= e):
-                    errors.append(f"❌ {token} 时间范围无效: `{time_val}` (0-23, 起始≤结束)")
+                if not (0 <= s <= 23 and 0 <= e <= 23):
+                    errors.append(f"❌ {token} 时间范围无效: `{time_val}` (小时须在 0-23)")
+                elif s > e and (s - e) >= 23:
+                    errors.append(f"❌ {token} 跨天窗口覆盖全天，等于不过滤，请缩小范围")
                 else:
                     if token == "ob-dep":
                         ob_dep_s, ob_dep_e = s, e
@@ -330,7 +332,7 @@ def _validate_trip_input(text):
                     elif token == "rt-arr":
                         rt_arr_s, rt_arr_e = s, e
             except Exception:
-                errors.append(f"❌ {token} 时间格式错误: `{time_val}` (应为 H-H)")
+                errors.append(f"❌ {token} 时间格式错误: `{time_val}` (应为 H-H，如 19-23 或跨天 22-2)")
             idx += 2
             continue
         # Legacy aliases
@@ -1082,8 +1084,11 @@ async def tg_command_listener():
                                         break
                                     try:
                                         s, e = [int(x) for x in tokens[i + 1].split("-")]
-                                        if not (0 <= s <= 23 and 0 <= e <= 23 and s <= e):
-                                            err = f"❌ {tok} 时间范围无效 (0-23，起始≤结束)"
+                                        if not (0 <= s <= 23 and 0 <= e <= 23):
+                                            err = f"❌ {tok} 时间范围无效 (小时须在 0-23，如 19-23 或跨天 22-2)"
+                                            break
+                                        if s > e and (s - e) >= 23:
+                                            err = f"❌ {tok} 跨天窗口覆盖全天，等于不过滤，请缩小范围"
                                             break
                                         windows[tok] = (s, e)
                                         i += 2
