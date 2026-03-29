@@ -168,12 +168,13 @@ def get_spring_price_for_trip(trip, proxy_url=None, proxy_id=None):
         }
     """
     ob_date = trip["outbound_date"]  # "2026-09-18"
-    rt_date = trip["return_date"]  # "2026-09-27"
+    rt_date = trip.get("return_date")  # None for one-way trips
+    is_one_way = trip.get("trip_type") == "one_way" or rt_date is None
     ob_month = ob_date[:7]  # "2026-09"
-    rt_month = rt_date[:7]
+    rt_month = rt_date[:7] if rt_date else None
 
     ob_flex = trip.get("outbound_flex", 0)
-    rt_flex = trip.get("return_flex", 1)
+    rt_flex = trip.get("return_flex", 1) if not is_one_way else 0
 
     result = {
         "outbound": None,
@@ -218,9 +219,9 @@ def get_spring_price_for_trip(trip, proxy_url=None, proxy_id=None):
     _do_warmup()
 
     # 并行请求所有路线（8次串行 → 8并发，最坏耗时从120s降至15s）
-    route_tasks = [(o, d, ob_month, "ob") for o, d in ob_routes] + [
-        (o, d, rt_month, "rt") for o, d in rt_routes
-    ]
+    route_tasks = [(o, d, ob_month, "ob") for o, d in ob_routes]
+    if not is_one_way and rt_month:
+        route_tasks += [(o, d, rt_month, "rt") for o, d in rt_routes]
 
     def _fetch(origin, dest, month, direction):
         prices, meta = fetch_spring_prices(origin, dest, month, session)
@@ -299,23 +300,29 @@ def get_spring_price_for_trip(trip, proxy_url=None, proxy_id=None):
     session.close()
 
     # 找全局最优组合
-    if all_ob and all_rt:
-        best_ob_key = min(all_ob, key=all_ob.get)
-        best_rt_key = min(all_rt, key=all_rt.get)
-        result["best_combo"] = {
-            "outbound_date": best_ob_key[0],
-            "outbound_route": f"{best_ob_key[1]}→{best_ob_key[2]}",
-            "outbound_cny": all_ob[best_ob_key],
-            "return_date": best_rt_key[0],
-            "return_route": f"{best_rt_key[1]}→{best_rt_key[2]}",
-            "return_cny": all_rt[best_rt_key],
-            "total_cny": all_ob[best_ob_key] + all_rt[best_rt_key],
-        }
+    if is_one_way:
+        # 单程：只有去程，total = 去程价格
+        if all_ob and result["outbound"]:
+            result["total_cny"] = result["outbound"]["price_cny"]
+            result["status"] = "ok"
+    else:
+        if all_ob and all_rt:
+            best_ob_key = min(all_ob, key=all_ob.get)
+            best_rt_key = min(all_rt, key=all_rt.get)
+            result["best_combo"] = {
+                "outbound_date": best_ob_key[0],
+                "outbound_route": f"{best_ob_key[1]}→{best_ob_key[2]}",
+                "outbound_cny": all_ob[best_ob_key],
+                "return_date": best_rt_key[0],
+                "return_route": f"{best_rt_key[1]}→{best_rt_key[2]}",
+                "return_cny": all_rt[best_rt_key],
+                "total_cny": all_ob[best_ob_key] + all_rt[best_rt_key],
+            }
 
-    if result["outbound"] and result["return"]:
-        result["total_cny"] = (
-            result["outbound"]["price_cny"] + result["return"]["price_cny"]
-        )
-        result["status"] = "ok"
+        if result["outbound"] and result["return"]:
+            result["total_cny"] = (
+                result["outbound"]["price_cny"] + result["return"]["price_cny"]
+            )
+            result["status"] = "ok"
 
     return result
