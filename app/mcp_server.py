@@ -123,7 +123,7 @@ def _get_trip_for_update(trip_id: int) -> dict | None:
         c.execute(
             "SELECT outbound_date, return_date, budget, "
             "outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end, "
-            "outbound_flex, return_flex, status, trip_type "
+            "outbound_flex, return_flex, status, trip_type, direct_only "
             "FROM trips WHERE id=%s",
             (trip_id,),
         )
@@ -142,6 +142,7 @@ def _get_trip_for_update(trip_id: int) -> dict | None:
         "return_flex": row[8] if row[8] is not None else 1,
         "status": row[9],
         "trip_type": row[10] or "round_trip",
+        "direct_only": bool(row[11]),
     }
 
 
@@ -165,9 +166,10 @@ def list_trips() -> dict:
                 "budget_cny": t["budget"],
                 "best_price_cny": t.get("best_price"),
                 "depart_window": f"{t['depart_after']}:00-{t['depart_before']}:00",
-                "arrive_window": f"{t['arrive_after']}:00-{t['arrive_before']}:00" if t.get("trip_type") != "one_way" else None,
+                "arrive_window": f"{t['arrive_after']}:00-{t['arrive_before']}:00",
                 "outbound_flex_days": t.get("outbound_flex", 0),
                 "return_flex_days": t.get("return_flex", 1) if t.get("trip_type") != "one_way" else None,
+                "direct_only": t.get("direct_only", False),
             }
             for t in trips
         ],

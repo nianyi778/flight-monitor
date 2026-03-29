@@ -153,6 +153,8 @@ def find_best_combinations(results, trip):
             # 有时间信息时才过滤时间窗；无时间信息则直接收录
             if arr_hour is not None and not (arrive_after <= arr_hour <= arrive_before):
                 continue
+            if direct_only and f.get("stops", 0) > 0:
+                continue
             f["_source"] = src["source"]
             f["_url"] = src.get("url", "")
             f["_flight_date"] = src.get("flight_date", trip.get("return_date"))
