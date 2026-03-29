@@ -226,6 +226,20 @@ def find_best_combinations(results, trip):
     outbound_flights.sort(key=lambda x: x.get("price_cny", 99999))
     throwaway_flights.sort(key=lambda x: x.get("price_cny", 99999))
 
+    # 去重：同一航班可能被多个路由对（如 NRT→PVG 和 HND→PVG）同时返回
+    def _dedup(flights):
+        seen = set()
+        result = []
+        for f in flights:
+            key = (f.get("airline", ""), f.get("flight_no", ""), f.get("departure_time", ""), f.get("price_cny"))
+            if key not in seen:
+                seen.add(key)
+                result.append(f)
+        return result
+
+    outbound_flights = _dedup(outbound_flights)
+    throwaway_flights = _dedup(throwaway_flights)
+
     if is_one_way:
         combos = []
         for ob in outbound_flights[:10]:
@@ -269,6 +283,7 @@ def find_best_combinations(results, trip):
             return_flights.append(f)
 
     return_flights.sort(key=lambda x: x.get("price_cny", 99999))
+    return_flights = _dedup(return_flights)
 
     combos = []
     for ob in outbound_flights[:8]:
