@@ -312,6 +312,9 @@ def edit_trip(
     # 已经是 one_way 的行程编辑其他字段时不重复写 NULL，避免 NOT NULL 约束问题
     effective_type = trip_type or existing_trip.get("trip_type", "round_trip")
     switching_to_one_way = (effective_type == "one_way" and existing_trip.get("trip_type") != "one_way")
+    switching_to_round_trip = (effective_type == "round_trip" and existing_trip.get("trip_type") == "one_way")
+    if switching_to_round_trip and not return_date:
+        return {"error": "切换为往返行程时必须同时提供回程日期 (return_date)"}
     if switching_to_one_way:
         updates["return_date"] = None
         updates["return_arrive_start"] = None

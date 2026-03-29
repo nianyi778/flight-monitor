@@ -124,7 +124,9 @@ def find_best_combinations(results, trip):
         # 单程：每个去程航班单独成为一个 combo，total = 去程价格
         combos = []
         for ob in outbound_flights[:10]:
-            total = ob.get("price_cny") or 99999
+            if not ob.get("price_cny"):
+                continue
+            total = ob["price_cny"]
             combos.append({
                 "outbound": ob,
                 "return": None,
