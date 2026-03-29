@@ -499,7 +499,8 @@ def _handle_trip_add(text):
     if not is_one_way and data.get("rt_arrive_start") is not None:
         preview_lines.append(f"🛬 回程落地: {data['rt_arrive_start']}:00-{data['rt_arrive_end']}:00")
     if data.get("max_stops") is not None:
-        preview_lines.append(f"✈️ 经停: {'直飞' if data['max_stops'] == 0 else f'≤{data[\"max_stops\"]}转'}")
+        stops_str = "直飞" if data["max_stops"] == 0 else f"≤{data['max_stops']}转"
+        preview_lines.append(f"✈️ 经停: {stops_str}")
     if data.get("throwaway"):
         preview_lines.append("🎫 甩尾票监控: 已启用")
     preview_lines.append("\n信息正确吗？")
