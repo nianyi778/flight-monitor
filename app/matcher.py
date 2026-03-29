@@ -138,7 +138,7 @@ def get_search_urls(trip):
                 "label": f"{dir_label} {pair_label} {base_date} [Google]",
                 "url": (
                     f"https://www.google.co.jp/travel/flights"
-                    f"?q=Flights+from+{orig}+to+{dest}+on+{base_date}+one+way&curr=JPY&hl=ja"
+                    f"#flt={orig}.{dest}.{base_date};c:JPY;e:1;sd:1;t:f"
                 ),
                 "wait": 10,
                 "flight_date": base_date,
