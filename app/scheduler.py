@@ -523,6 +523,9 @@ async def _run_check_inner(force, all_trips, bot_module):
                 s["pending_ack"] = True
                 s["last_alert_msg"] = msg
                 save_state(s)
+                # 检查已完成，在等待用户确认期间放开 checking_in_progress
+                # 否则"立即查价"按钮会永远显示"查价中"直到用户发送"确认收到"
+                bot_module.checking_in_progress = False
                 await push_until_ack(msg)
             else:
                 trend = ""

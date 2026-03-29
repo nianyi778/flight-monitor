@@ -910,7 +910,20 @@ async def tg_command_listener():
                     cb_msg_id = callback.get("message", {}).get("message_id")
                     chat_id = str(callback.get("message", {}).get("chat", {}).get("id", ""))
                     if chat_id in TG_ALLOWED_CHATS:
-                        _handle_callback(cb_id, cb_data, cb_msg_id)
+                        try:
+                            _handle_callback(cb_id, cb_data, cb_msg_id)
+                        except Exception as e:
+                            log.error(f"处理按钮回调异常 [{cb_data}]: {e}")
+                            try:
+                                tg_answer_callback(cb_id, "❌ 操作失败，请重试")
+                            except Exception:
+                                pass
+                    else:
+                        # 未授权的 chat，静默回答以防按钮卡死
+                        try:
+                            tg_answer_callback(cb_id)
+                        except Exception:
+                            pass
                     continue
 
                 # 处理文字命令
