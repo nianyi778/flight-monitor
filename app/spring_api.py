@@ -169,7 +169,7 @@ def get_spring_price_for_trip(trip, proxy_url=None, proxy_id=None):
     """
     ob_date = trip["outbound_date"]  # "2026-09-18"
     rt_date = trip.get("return_date")  # None for one-way trips
-    is_one_way = trip.get("trip_type") == "one_way" or rt_date is None
+    is_one_way = trip.get("trip_type") == "one_way"
     ob_month = ob_date[:7]  # "2026-09"
     rt_month = rt_date[:7] if rt_date else None
 

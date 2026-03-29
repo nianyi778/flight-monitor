@@ -556,7 +556,7 @@ async def _run_check_inner(force, all_trips, bot_module):
                 rt_date_tag = (
                     f" [{best_rt.get('_flight_date', '')}]"
                     if best_rt.get("_flight_date")
-                    and best_rt.get("_flight_date") != trip["return_date"]
+                    and best_rt.get("_flight_date") != trip.get("return_date")
                     else ""
                 )
                 ob_info = (

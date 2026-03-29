@@ -88,7 +88,7 @@ def save_to_db(results, combos, trip):
             for direction in directions:
                 for src in results[direction]:
                     source_flight_date = src.get("flight_date") or (
-                        trip["outbound_date"] if direction == "outbound" else trip["return_date"]
+                        trip["outbound_date"] if direction == "outbound" else trip.get("return_date")
                     )
                     for f in src.get("flights", []):
                         try:
