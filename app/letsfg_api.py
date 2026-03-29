@@ -18,7 +18,7 @@ from app.anti_bot import classify_exception, finalize_result_status, make_result
 from app.config import log
 
 _LETSFG_BIN = os.getenv("LETSFG_BIN") or shutil.which("letsfg")
-_LETSFG_TIMEOUT = int(os.getenv("LETSFG_TIMEOUT") or "90")
+_LETSFG_TIMEOUT = int(os.getenv("LETSFG_TIMEOUT") or "200")
 _LETSFG_MODE = os.getenv("LETSFG_MODE", "auto").lower()  # auto/local/cloud
 
 
@@ -61,34 +61,33 @@ def _pick_cli_mode() -> str:
 
 
 def _run_letsfg(origin: str, destination: str, date_str: str) -> dict:
-    if not _LETSFG_BIN:
-        raise FileNotFoundError("letsfg CLI 未安装")
-    mode = _pick_cli_mode()
-    subcommand = "search" if mode == "cloud" else "search-local"
-    cmd = [_LETSFG_BIN, subcommand, origin, destination, date_str, "--json"]
-    env = dict(os.environ)
-    env.setdefault("CHROME_PATH", "/root/.cache/ms-playwright/chromium-1208/chrome-linux/chrome")
-    proc = subprocess.run(
-        cmd,
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=_LETSFG_TIMEOUT,
-        env=env,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout or "letsfg failed").strip())
-    output = (proc.stdout or "").strip()
-    json_starts = [idx for idx in (output.find("{"), output.find("[")) if idx != -1]
-    if json_starts:
-        return json.loads(output[min(json_starts):])
-    for line in reversed(output.splitlines()):
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith("{") or line.startswith("["):
-            return json.loads(line)
-    return json.loads(output)
+    """
+    直接调用 letsfg Python API（不启动子进程，避免 Chrome 弹窗风暴）。
+    有 LETSFG_API_KEY 时激活 Cloud Run 后端（Kiwi/Amadeus/Aviasales 等聚合），
+    无需浏览器，单次 HTTP 调用返回结果。
+    本地 connector 限制 max_browsers=1 避免同时弹出大量窗口。
+    """
+    try:
+        import asyncio
+        from letsfg.local import search_local
+    except ImportError:
+        raise FileNotFoundError("letsfg 未安装: pip install 'letsfg[cli]'")
+
+    async def _search():
+        return await asyncio.wait_for(
+            search_local(
+                origin=origin,
+                destination=destination,
+                date_from=date_str,
+                adults=1,
+                currency="CNY",
+                limit=30,
+                max_browsers=1,
+            ),
+            timeout=_LETSFG_TIMEOUT,
+        )
+
+    return asyncio.run(_search())
 
 
 def _normalize_time(value):
@@ -119,7 +118,13 @@ def _extract_segment(offer: dict) -> tuple[str, str, str, str]:
         if isinstance(value, list):
             candidates.extend([v for v in value if isinstance(v, dict)])
     if not candidates and isinstance(offer.get("outbound"), dict):
-        candidates.append(offer["outbound"])
+        ob = offer["outbound"]
+        # letsfg cloud format: outbound.segments[]
+        ob_segs = ob.get("segments") or ob.get("legs") or []
+        if ob_segs and isinstance(ob_segs[0], dict):
+            candidates.extend(ob_segs)
+        else:
+            candidates.append(ob)
     seg = candidates[0] if candidates else offer
     airline = (
         seg.get("airline")
