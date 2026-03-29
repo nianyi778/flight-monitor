@@ -441,7 +441,7 @@ def edit_trip(
     for k in ("outbound_date", "return_date", "budget",
                "ob_depart_start", "ob_depart_end", "ob_arrive_start", "ob_arrive_end",
                "rt_depart_start", "rt_depart_end", "rt_arrive_start", "rt_arrive_end",
-               "outbound_flex", "return_flex", "max_stops"):
+               "ob_flex", "rt_flex", "max_stops"):
         if k in updates:
             validate_payload[k] = updates[k]
 
