@@ -441,10 +441,12 @@ async def _run_check_inner(force, all_trips, bot_module):
                     route = spring_leg.get("route", "")
                     split = route.split("→")
                     parts = split if len(split) == 2 else ["", ""]
-                    date_nodash = (spring_leg.get("date") or "").replace("-", "")
+                    _sd = spring_leg.get("date") or ""
+                    _sd_parts = _sd.split("-")
+                    _sd_nolz = f"{_sd_parts[0]}-{int(_sd_parts[1])}-{int(_sd_parts[2])}" if len(_sd_parts) == 3 else _sd
                     results[direction].append({
                         "source": f"春秋{parts[0]}{parts[1]}",
-                        "url": f"https://www.ch.com/flights/{parts[0].lower()}-{parts[1].lower()}/?depDate={date_nodash}",
+                        "url": f"https://flights.ch.com/{parts[0].upper()}-{parts[1].upper()}.html?Mtype=0&SType=0&IfRet=false&FDate={_sd_nolz}&ActId=&IsNew=1",
                         "flight_date": spring_leg.get("date"),
                         "lowest_price": spring_leg.get("price_cny"),
                         "flights": [{
@@ -482,7 +484,7 @@ async def _run_check_inner(force, all_trips, bot_module):
                                 "price_cny": spring_best["outbound_cny"],
                                 "original_currency": "USD",
                                 "_source": "春秋官网",
-                                "_url": f"https://www.ch.com/flights/{spring_best['outbound_route'].split('→')[0].lower()}-{spring_best['outbound_route'].split('→')[-1].lower()}/?depDate={(spring_best['outbound_date'] or '').replace('-', '')}",
+                                "_url": (lambda d, r: f"https://flights.ch.com/{r.split('→')[0].upper()}-{r.split('→')[-1].upper()}.html?Mtype=0&SType=0&IfRet=false&FDate={d.split('-')[0]}-{int(d.split('-')[1])}-{int(d.split('-')[2])}&ActId=&IsNew=1" if d and len(d.split('-'))==3 else "")(spring_best['outbound_date'] or '', spring_best['outbound_route']),
                                 "_flight_date": spring_best["outbound_date"],
                             },
                             "return": {
@@ -492,7 +494,7 @@ async def _run_check_inner(force, all_trips, bot_module):
                                 "price_cny": spring_best["return_cny"],
                                 "original_currency": "USD",
                                 "_source": "春秋官网",
-                                "_url": f"https://www.ch.com/flights/{spring_best['return_route'].split('→')[0].lower()}-{spring_best['return_route'].split('→')[-1].lower()}/?depDate={(spring_best['return_date'] or '').replace('-', '')}",
+                                "_url": (lambda d, r: f"https://flights.ch.com/{r.split('→')[0].upper()}-{r.split('→')[-1].upper()}.html?Mtype=0&SType=0&IfRet=false&FDate={d.split('-')[0]}-{int(d.split('-')[1])}-{int(d.split('-')[2])}&ActId=&IsNew=1" if d and len(d.split('-'))==3 else "")(spring_best['return_date'] or '', spring_best['return_route']),
                                 "_flight_date": spring_best["return_date"],
                             },
                             "total": spring_best["total_cny"],
@@ -619,7 +621,8 @@ async def main():
 
     trips = get_active_trips()
     log.info("=" * 55)
-    log.info("✈️ 机票价格监控系统启动 v6.10 (Docker)")
+    from app.version import VERSION
+    log.info(f"✈️ 机票价格监控系统启动 {VERSION} (Docker)")
     log.info(f"   监控行程: {len(trips)} 个")
     log.info(f"   检查间隔: ~{CHECK_INTERVAL}s (随机抖动)")
     log.info(f"   TG通知: {'已配置' if TG_BOT_TOKEN else '⚠️ 未配置'}")
@@ -634,7 +637,7 @@ async def main():
     state["boot_count"] = boot_count
     save_state(state)
     tg_send(
-        f"🟢 *机票监控系统 v6.10 已上线* (第{boot_count}次启动)\n\n"
+        f"🟢 *机票监控系统 {VERSION} 已上线* (第{boot_count}次启动)\n\n"
         f"📊 监控行程: {len(get_active_trips())} 个\n"
         f"⏰ 约每 {CHECK_INTERVAL // 60} 分钟巡查（随机抖动防检测）\n\n"
         f"💡 可用命令:\n"

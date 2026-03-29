@@ -105,7 +105,7 @@ def fetch_spring_prices(origin, destination, year_month, session=None):
         "IsIJFlight": "false",
         "ActId": "",
         "IsReturn": "false",
-        "IsShowTaxprice": "false",
+        "IsShowTaxprice": "true",
     }
 
     requester = session or requests
