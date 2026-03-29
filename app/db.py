@@ -40,7 +40,7 @@ def get_active_trips():
             cur.execute(
                 "SELECT id, outbound_date, return_date, budget, best_price, "
                 "outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end, "
-                "outbound_flex, return_flex, trip_type "
+                "outbound_flex, return_flex, trip_type, direct_only "
                 "FROM trips WHERE status='active'"
             )
             rows = cur.fetchall()
@@ -49,9 +49,11 @@ def get_active_trips():
              "return_date": str(r[2]) if r[2] else None,
              "budget": r[3], "best_price": r[4],
              "depart_after": r[5] or 19, "depart_before": r[6] or 23,
-             "arrive_after": r[7] or 0, "arrive_before": r[8] or 6,
+             "arrive_after": r[7] if r[7] is not None else 0,
+             "arrive_before": r[8] if r[8] is not None else 6,
              "outbound_flex": r[9] or 0, "return_flex": r[10] if r[10] is not None else 1,
-             "trip_type": r[11] or "round_trip"}
+             "trip_type": r[11] or "round_trip",
+             "direct_only": bool(r[12])}
             for r in rows
         ]
     except Exception as e:

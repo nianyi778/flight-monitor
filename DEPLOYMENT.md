@@ -70,16 +70,18 @@ CREATE TABLE trips (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     outbound_depart_start INT DEFAULT 19,
     outbound_depart_end INT DEFAULT 23,
-    return_arrive_start INT DEFAULT 0,         -- 单程时为 NULL
-    return_arrive_end INT DEFAULT 6,           -- 单程时为 NULL
+    return_arrive_start INT DEFAULT 0,         -- 往返:回程落地时间；单程:去程落地时间
+    return_arrive_end INT DEFAULT 6,           -- 往返:回程落地时间；单程:去程落地时间
     outbound_flex INT DEFAULT 0,
     return_flex INT DEFAULT 1,                 -- 单程时为 NULL
+    direct_only TINYINT(1) DEFAULT 0,          -- 1=只看直飞
     INDEX idx_status (status)
 );
 
 -- 已有数据库迁移（旧版升级执行一次）：
 -- ALTER TABLE trips MODIFY COLUMN return_date DATE NULL;
 -- ALTER TABLE trips ADD COLUMN trip_type VARCHAR(10) DEFAULT 'round_trip' AFTER budget;
+-- ALTER TABLE trips ADD COLUMN direct_only TINYINT(1) DEFAULT 0;  -- v5.7 新增直飞过滤
 
 CREATE TABLE flight_prices (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,

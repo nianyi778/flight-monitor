@@ -82,11 +82,13 @@ def _validate_trip_fields(payload: dict, existing_trip: dict | None = None) -> d
         "depart_start": payload.get("depart_start", existing_trip.get("depart_start") if existing_trip else 19),
         "depart_end": payload.get("depart_end", existing_trip.get("depart_end") if existing_trip else 23),
     }
-    if trip_type == "round_trip":
-        hour_fields["arrive_start"] = payload.get("arrive_start", existing_trip.get("arrive_start") if existing_trip else 0)
-        hour_fields["arrive_end"] = payload.get("arrive_end", existing_trip.get("arrive_end") if existing_trip else 6)
+    # 单程时 arrive_start/end 用于去程落地时间过滤，往返时用于回程到达
+    hour_fields["arrive_start"] = payload.get("arrive_start", existing_trip.get("arrive_start") if existing_trip else 0)
+    hour_fields["arrive_end"] = payload.get("arrive_end", existing_trip.get("arrive_end") if existing_trip else 6)
     normalized_hours = {}
     for name, value in hour_fields.items():
+        if value is None:
+            continue
         try:
             normalized_hours[name] = int(value)
         except Exception:
@@ -95,8 +97,9 @@ def _validate_trip_fields(payload: dict, existing_trip: dict | None = None) -> d
             return {"error": f"{name} 必须在 0-23"}
     if normalized_hours.get("depart_start", 0) > normalized_hours.get("depart_end", 23):
         return {"error": "去程时间窗口无效"}
-    if "arrive_start" in normalized_hours and normalized_hours["arrive_start"] > normalized_hours["arrive_end"]:
-        return {"error": "回程时间窗口无效"}
+    if "arrive_start" in normalized_hours and "arrive_end" in normalized_hours and normalized_hours["arrive_start"] > normalized_hours["arrive_end"]:
+        label = "去程落地" if trip_type == "one_way" else "回程到达"
+        return {"error": f"{label}时间窗口无效"}
 
     flex_fields = {
         "outbound_flex": payload.get("outbound_flex", existing_trip.get("outbound_flex") if existing_trip else 0),
@@ -183,6 +186,7 @@ def add_trip(
     arrive_end: int = 6,
     outbound_flex: int = 0,
     return_flex: int = 1,
+    direct_only: bool = False,
 ) -> dict:
     """
     添加新的机票监控行程。
@@ -194,10 +198,11 @@ def add_trip(
         trip_type: 行程类型，round_trip（往返，默认）或 one_way（单程）
         depart_start: 去程最早出发时间（0-23），默认19
         depart_end: 去程最晚出发时间（0-23），默认23
-        arrive_start: 回程最早到达时间（0-23），默认0（单程时忽略）
-        arrive_end: 回程最晚到达时间（0-23），默认6（单程时忽略）
+        arrive_start: 往返回程最早到达时间（0-23），默认0；单程时为去程落地最早时间
+        arrive_end: 往返回程最晚到达时间（0-23），默认6；单程时为去程落地最晚时间
         outbound_flex: 去程弹性天数（向前搜索），默认0
         return_flex: 回程弹性天数（向前搜索），默认1（单程时忽略）
+        direct_only: 只看直飞（不含经停），默认False
 
     Returns:
         新行程的 ID 和详情
@@ -223,14 +228,15 @@ def add_trip(
         c.execute(
             "INSERT INTO trips (outbound_date, return_date, budget, trip_type, "
             "outbound_depart_start, outbound_depart_end, return_arrive_start, return_arrive_end, "
-            "outbound_flex, return_flex) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "outbound_flex, return_flex, direct_only) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (outbound_date, None if is_one_way else return_date, budget, trip_type,
              depart_start, depart_end,
-             None if is_one_way else arrive_start,
-             None if is_one_way else arrive_end,
+             arrive_start,
+             arrive_end,
              outbound_flex,
-             None if is_one_way else return_flex)
+             None if is_one_way else return_flex,
+             1 if direct_only else 0)
         )
         db.commit()
         new_id = c.lastrowid
@@ -260,6 +266,7 @@ def edit_trip(
     arrive_end: int = None,
     outbound_flex: int = None,
     return_flex: int = None,
+    direct_only: bool = None,
 ) -> dict:
     """
     编辑已有行程。只需传入要修改的字段，其他保持不变。
@@ -272,10 +279,11 @@ def edit_trip(
         trip_type: 行程类型 round_trip 或 one_way
         depart_start: 去程最早出发时间
         depart_end: 去程最晚出发时间
-        arrive_start: 回程最早到达时间
-        arrive_end: 回程最晚到达时间
+        arrive_start: 往返回程/单程去程的最早落地时间
+        arrive_end: 往返回程/单程去程的最晚落地时间
         outbound_flex: 去程弹性天数
         return_flex: 回程弹性天数
+        direct_only: True=只看直飞，False=不限（经停也纳入）
     """
     updates = {}
     if outbound_date is not None:
@@ -298,6 +306,8 @@ def edit_trip(
         updates["outbound_flex"] = outbound_flex
     if return_flex is not None:
         updates["return_flex"] = return_flex
+    if direct_only is not None:
+        updates["direct_only"] = 1 if direct_only else 0
 
     if not updates:
         return {"error": "没有要修改的字段"}

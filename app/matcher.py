@@ -106,12 +106,23 @@ def find_best_combinations(results, trip):
     budget = trip.get("budget", 1500)
     is_one_way = trip.get("trip_type") == "one_way"
 
+    direct_only = trip.get("direct_only", False)
+    # 单程时 arrive_after/before 用于过滤去程落地时间
+    ob_arrive_after = arrive_after if is_one_way else None
+    ob_arrive_before = arrive_before if is_one_way else None
+
     outbound_flights = []
     for src in results["outbound"]:
         for f in src.get("flights", []):
             dep_hour = _parse_hour(f.get("departure_time"))
             # 有时间信息时才过滤时间窗；无时间信息则直接收录
             if dep_hour is not None and not (depart_after <= dep_hour <= depart_before):
+                continue
+            if is_one_way and ob_arrive_after is not None:
+                arr_hour = _parse_hour(f.get("arrival_time"))
+                if arr_hour is not None and not (ob_arrive_after <= arr_hour <= ob_arrive_before):
+                    continue
+            if direct_only and f.get("stops", 0) > 0:
                 continue
             f["_source"] = src["source"]
             f["_url"] = src.get("url", "")
