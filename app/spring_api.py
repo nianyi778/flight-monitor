@@ -71,7 +71,7 @@ def get_exchange_rates():
     return _rate_cache["usd_cny"], _rate_cache["jpy_cny"]
 
 
-def fetch_spring_prices(origin, destination, year_month, session=None):
+def fetch_spring_prices(origin, destination, year_month, session=None, _cache=None):
     """
     从春秋官网API获取某月每日最低价
 
@@ -88,6 +88,11 @@ def fetch_spring_prices(origin, destination, year_month, session=None):
         }
         失败返回 {}
     """
+    _cache_key = (origin, destination, year_month)
+    if _cache is not None and _cache_key in _cache:
+        log.debug(f"  🌸 春秋价格缓存命中: {origin}→{destination} {year_month}")
+        return _cache[_cache_key], {"status": "ok", "block_reason": None, "retryable": True}
+
     parts = year_month.replace("-0", "-").split("-")
     dep_date = f"{parts[0]}-{parts[1]}-1"
 
@@ -141,6 +146,8 @@ def fetch_spring_prices(origin, destination, year_month, session=None):
         log.info(
             f"  🌸 春秋API {origin}→{destination} {year_month}: {len(prices)} 天有价格"
         )
+        if _cache is not None and prices:
+            _cache[_cache_key] = prices
         return prices, {"status": "ok", "block_reason": None, "retryable": True}
 
     except Exception as e:
@@ -154,7 +161,7 @@ def fetch_spring_prices(origin, destination, year_month, session=None):
         }
 
 
-def get_spring_price_for_trip(trip, proxy_url=None, proxy_id=None):
+def get_spring_price_for_trip(trip, proxy_url=None, proxy_id=None, price_cache=None):
     """
     获取某行程的春秋官网直销价
 
@@ -224,7 +231,7 @@ def get_spring_price_for_trip(trip, proxy_url=None, proxy_id=None):
         route_tasks += [(o, d, rt_month, "rt") for o, d in rt_routes]
 
     def _fetch(origin, dest, month, direction):
-        prices, meta = fetch_spring_prices(origin, dest, month, session)
+        prices, meta = fetch_spring_prices(origin, dest, month, session, _cache=price_cache)
         return origin, dest, month, direction, prices, meta
 
     with ThreadPoolExecutor(max_workers=8) as executor:

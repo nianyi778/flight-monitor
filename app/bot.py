@@ -642,16 +642,21 @@ def _handle_help():
 # Callback Query 处理（按钮点击）
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def _handle_callback(callback_id, data, message_id):
-    """处理 Inline Keyboard 按钮回调"""
-
+def _handle_callback(callback_id, data, message_id, _loop=None):
+    """处理 Inline Keyboard 按钮回调。
+    _loop: 主事件循环引用，用于从线程安全地触发 asyncio.Event。
+           call_soon_threadsafe 是唯一跨线程操作 asyncio 原语的正确方式。
+    """
     if data == "do_check":
         if checking_in_progress:
             tg_answer_callback(callback_id, "⏳ 正在查价中，请稍候...")
         else:
             tg_answer_callback(callback_id, "🔍 开始查价...")
             tg_send("🔍 收到！正在立即查价...")
-            force_check_event.set()
+            if _loop is not None:
+                _loop.call_soon_threadsafe(force_check_event.set)
+            else:
+                force_check_event.set()
 
     elif data == "show_trips":
         tg_answer_callback(callback_id)
@@ -885,6 +890,8 @@ async def tg_command_listener():
     """后台监听 TG 命令和按钮回调"""
     from app.scheduler import shutdown_event
 
+    _loop = asyncio.get_running_loop()  # 主 loop 引用，用于线程安全触发 asyncio.Event
+
     state = load_state()
     last_update_id = state.get("last_tg_update_id", 0)
 
@@ -913,7 +920,10 @@ async def tg_command_listener():
                     chat_id = str(callback.get("message", {}).get("chat", {}).get("id", ""))
                     if chat_id in TG_ALLOWED_CHATS:
                         try:
-                            _handle_callback(cb_id, cb_data, cb_msg_id)
+                            # asyncio.to_thread：_handle_callback 内部全是同步 HTTP，
+                            # 不应阻塞事件循环。_loop 引用保证 force_check_event.set
+                            # 通过 call_soon_threadsafe 安全跨线程触发。
+                            await asyncio.to_thread(_handle_callback, cb_id, cb_data, cb_msg_id, _loop)
                         except Exception as e:
                             log.error(f"处理按钮回调异常 [{cb_data}]: {e}")
                             try:

@@ -405,6 +405,10 @@ async def _run_check_inner(force, all_trips, bot_module):
         f"🕐 *{now_jst().strftime('%H:%M')} 巡查报告* (第{check_count}次 | {len(due_trips)}个行程 {total_unique}次抓取)\n"
     ]
 
+    # 本轮所有行程共享春秋价格缓存 {(origin, dest, month): prices}
+    # 相同路线+相同月份只发一次 HTTP 请求，其余从缓存返回
+    spring_price_cache: dict = {}
+
     for trip in due_trips:
         try:
             # 重组该行程的 results
@@ -431,6 +435,7 @@ async def _run_check_inner(force, all_trips, bot_module):
             spring = await asyncio.to_thread(
                 get_spring_price_for_trip,
                 trip, proxy_url=spring_proxy.get("url"), proxy_id=spring_proxy.get("id"),
+                price_cache=spring_price_cache,
             )
             record_source_outcome(
                 state,
