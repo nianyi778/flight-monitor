@@ -14,7 +14,7 @@ from app.config import (
     SOURCE_COOLDOWN_SECONDS,
     SOURCE_MAX_CONSECUTIVE_FAILURES,
 )
-_SOURCE_NAMES = ("spring_api", "letsfg_api", "ctrip_api", "google_api")
+_SOURCE_NAMES = ("spring_api", "kiwi_api", "google_api")
 
 
 def ensure_runtime_state(state: dict) -> dict:

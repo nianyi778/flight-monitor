@@ -215,7 +215,7 @@ def _load_cached_results(state, searches):
     cached = {}
     remaining = []
     source_name_map = {
-        "ctrip": "ctrip_api",
+        "kiwi": "kiwi_api",
         "google": "google_api",
         "spring": "spring_api",
     }
@@ -315,42 +315,27 @@ async def _run_check_inner(force, all_trips, bot_module):
 
     log.info(f"🔍 搜索去重: {total_raw}个 → {total_unique}个（节省{saved}次抓取）")
 
-    # 3. API 瀑布调用（携程 → LetsFG → Google → 春秋官网）
+    # 3. API 瀑布调用（Kiwi → Google → 春秋官网）
     unique_searches = [v["search"] for v in url_map.values()]
 
-    letsfg_searches = [s for s in unique_searches if s.get("source_type") == "letsfg"]
-    ctrip_searches = [s for s in unique_searches if s.get("source_type") == "ctrip"]
+    kiwi_searches = [s for s in unique_searches if s.get("source_type") == "kiwi"]
     google_searches = [s for s in unique_searches if s.get("source_type") == "google"]
 
     all_analysis = {}  # url -> analysis_result
 
-    # — LetsFG CLI / SDK —
-    if letsfg_searches:
-        from app.letsfg_api import get_letsfg_flights_for_searches
+    # — Kiwi.com GraphQL API（零认证，覆盖 MU/CA/NH/9C/HO 等全航司）—
+    if kiwi_searches:
+        from app.kiwi_api import get_kiwi_flights_for_searches
 
-        cached, remaining = _load_cached_results(state, letsfg_searches)
+        cached, remaining = _load_cached_results(state, kiwi_searches)
         all_analysis.update(cached)
-        if not source_in_cooldown(state, "letsfg_api", now_jst()) and remaining:
-            proxy = choose_proxy(state, "letsfg_api", now_jst())
-            fetched = get_letsfg_flights_for_searches(
+        if not source_in_cooldown(state, "kiwi_api", now_jst()) and remaining:
+            proxy = choose_proxy(state, "kiwi_api", now_jst())
+            fetched = get_kiwi_flights_for_searches(
                 remaining, proxy_url=proxy.get("url"), proxy_id=proxy.get("id")
             )
             all_analysis.update(fetched)
-            _record_results_for_source(state, "letsfg_api", fetched, remaining)
-
-    # — 携程 API —
-    if ctrip_searches:
-        from app.ctrip_api import get_ctrip_flights_for_searches
-
-        cached, remaining = _load_cached_results(state, ctrip_searches)
-        all_analysis.update(cached)
-        if not source_in_cooldown(state, "ctrip_api", now_jst()) and remaining:
-            proxy = choose_proxy(state, "ctrip_api", now_jst())
-            fetched = get_ctrip_flights_for_searches(
-                remaining, proxy_url=proxy.get("url"), proxy_id=proxy.get("id")
-            )
-            all_analysis.update(fetched)
-            _record_results_for_source(state, "ctrip_api", fetched, remaining)
+            _record_results_for_source(state, "kiwi_api", fetched, remaining)
 
     # — Google Flights API —
     if google_searches:

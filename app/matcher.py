@@ -100,34 +100,17 @@ def get_search_urls(trip):
             for date in dates:
                 suffix = f"({date})" if date != base_date else ""
 
-                # 携程
+                # Kiwi.com（GraphQL API，零认证，覆盖 MU/CA/NH/9C/HO 等全航司）
                 urls.append({
-                    "name": f"携程_{pair_str}{suffix}",
+                    "name": f"Kiwi_{pair_str}{suffix}",
                     "direction": direction,
-                    "label": f"{dir_label} {pair_label} {date}",
-                    "url": (
-                        f"https://flights.ctrip.com/online/list/oneway-{orig.lower()}-{dest.lower()}"
-                        f"?depdate={date}&cabin=y&adult=1&child=0&infant=0"
-                    ),
-                    "wait": 8,
+                    "label": f"{dir_label} {pair_label} {date} [Kiwi]",
+                    "url": f"kiwi://search/{orig}-{dest}/{date}",
+                    "wait": 0,
                     "flight_date": date,
                     "origin": orig,
                     "destination": dest,
-                    "source_type": "ctrip",
-                    "throwaway_for": None,
-                })
-
-                # LetsFG
-                urls.append({
-                    "name": f"LetsFG_{pair_str}{suffix}",
-                    "direction": direction,
-                    "label": f"{dir_label} {pair_label} {date} [LetsFG]",
-                    "url": f"letsfg://search/{orig}-{dest}/{date}",
-                    "wait": 8,
-                    "flight_date": date,
-                    "origin": orig,
-                    "destination": dest,
-                    "source_type": "letsfg",
+                    "source_type": "kiwi",
                     "throwaway_for": None,
                 })
 
@@ -151,27 +134,6 @@ def get_search_urls(trip):
     _add_urls(ob_pairs, "outbound", ob_dates)
     if not is_one_way:
         _add_urls(rt_pairs, "return", rt_dates)
-
-    # 甩尾搜索（仅携程，去程日期，搜 origin→beyond，中转点=destination）
-    if trip.get("throwaway"):
-        throwaway_pairs = get_throwaway_searches(origin, destination)
-        base_date = trip["outbound_date"]
-        for orig, beyond in throwaway_pairs[:6]:
-            urls.append({
-                "name": f"携程甩尾_{orig}_{beyond}",
-                "direction": "outbound",
-                "label": f"去程甩尾 {orig}→{beyond} via {destination} {base_date}",
-                "url": (
-                    f"https://flights.ctrip.com/online/list/oneway-{orig.lower()}-{beyond.lower()}"
-                    f"?depdate={base_date}&cabin=y&adult=1&child=0&infant=0"
-                ),
-                "wait": 8,
-                "flight_date": base_date,
-                "origin": orig,
-                "destination": beyond,
-                "source_type": "ctrip",
-                "throwaway_for": destination,  # 真实目的地
-            })
 
     return urls
 
