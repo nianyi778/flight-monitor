@@ -68,52 +68,95 @@ def _normalize_cdp_target(value: str) -> str:
 
 _CITY_META = {
     "NRT": {
-        "city_code": "TYO",
-        "city_name": "东京",
-        "country_id": 78,
-        "country_code": "JP",
-        "country_name": "日本",
-        "province_id": 0,
-        "city_id": 228,
-        "timezone": 540,
-        "airport_name": "成田国际机场",
-        "airport_name_en": "Tokyo(Narita)",
+        "city_code": "TYO", "city_name": "东京", "country_id": 78,
+        "country_code": "JP", "country_name": "日本", "province_id": 0,
+        "city_id": 228, "timezone": 540,
+        "airport_name": "成田国际机场", "airport_name_en": "Tokyo(Narita)",
     },
     "HND": {
-        "city_code": "TYO",
-        "city_name": "东京",
-        "country_id": 78,
-        "country_code": "JP",
-        "country_name": "日本",
-        "province_id": 0,
-        "city_id": 228,
-        "timezone": 540,
-        "airport_name": "羽田机场",
-        "airport_name_en": "Tokyo(Haneda)",
+        "city_code": "TYO", "city_name": "东京", "country_id": 78,
+        "country_code": "JP", "country_name": "日本", "province_id": 0,
+        "city_id": 228, "timezone": 540,
+        "airport_name": "羽田机场", "airport_name_en": "Tokyo(Haneda)",
     },
     "PVG": {
-        "city_code": "SHA",
-        "city_name": "上海",
-        "country_id": 1,
-        "country_code": "CN",
-        "country_name": "中国",
-        "province_id": 2,
-        "city_id": 2,
-        "timezone": 480,
-        "airport_name": "浦东国际机场",
-        "airport_name_en": "Shanghai Pudong",
+        "city_code": "SHA", "city_name": "上海", "country_id": 1,
+        "country_code": "CN", "country_name": "中国", "province_id": 2,
+        "city_id": 2, "timezone": 480,
+        "airport_name": "浦东国际机场", "airport_name_en": "Shanghai Pudong",
     },
     "SHA": {
-        "city_code": "SHA",
-        "city_name": "上海",
-        "country_id": 1,
-        "country_code": "CN",
-        "country_name": "中国",
-        "province_id": 2,
-        "city_id": 2,
-        "timezone": 480,
-        "airport_name": "虹桥国际机场",
-        "airport_name_en": "Shanghai Hongqiao",
+        "city_code": "SHA", "city_name": "上海", "country_id": 1,
+        "country_code": "CN", "country_name": "中国", "province_id": 2,
+        "city_id": 2, "timezone": 480,
+        "airport_name": "虹桥国际机场", "airport_name_en": "Shanghai Hongqiao",
+    },
+    # ── 甩尾延伸目的地 ───────────────────────────────
+    "KIX": {
+        "city_code": "OSA", "city_name": "大阪", "country_id": 78,
+        "country_code": "JP", "country_name": "日本", "province_id": 0,
+        "city_id": 231, "timezone": 540,
+        "airport_name": "关西国际机场", "airport_name_en": "Osaka(Kansai)",
+    },
+    "ITM": {
+        "city_code": "OSA", "city_name": "大阪", "country_id": 78,
+        "country_code": "JP", "country_name": "日本", "province_id": 0,
+        "city_id": 231, "timezone": 540,
+        "airport_name": "大阪伊丹机场", "airport_name_en": "Osaka(Itami)",
+    },
+    "CTS": {
+        "city_code": "CTS", "city_name": "札幌", "country_id": 78,
+        "country_code": "JP", "country_name": "日本", "province_id": 0,
+        "city_id": 680, "timezone": 540,
+        "airport_name": "新千岁机场", "airport_name_en": "Sapporo(Chitose)",
+    },
+    "FUK": {
+        "city_code": "FUK", "city_name": "福冈", "country_id": 78,
+        "country_code": "JP", "country_name": "日本", "province_id": 0,
+        "city_id": 229, "timezone": 540,
+        "airport_name": "福冈机场", "airport_name_en": "Fukuoka",
+    },
+    "OKA": {
+        "city_code": "OKA", "city_name": "冲绳", "country_id": 78,
+        "country_code": "JP", "country_name": "日本", "province_id": 0,
+        "city_id": 682, "timezone": 540,
+        "airport_name": "那霸机场", "airport_name_en": "Okinawa(Naha)",
+    },
+    "ICN": {
+        "city_code": "SEL", "city_name": "首尔", "country_id": 116,
+        "country_code": "KR", "country_name": "韩国", "province_id": 0,
+        "city_id": 160, "timezone": 540,
+        "airport_name": "仁川国际机场", "airport_name_en": "Seoul(Incheon)",
+    },
+    "SYD": {
+        "city_code": "SYD", "city_name": "悉尼", "country_id": 10,
+        "country_code": "AU", "country_name": "澳大利亚", "province_id": 0,
+        "city_id": 45, "timezone": 660,
+        "airport_name": "悉尼机场", "airport_name_en": "Sydney",
+    },
+    "CAN": {
+        "city_code": "CAN", "city_name": "广州", "country_id": 1,
+        "country_code": "CN", "country_name": "中国", "province_id": 19,
+        "city_id": 103, "timezone": 480,
+        "airport_name": "白云国际机场", "airport_name_en": "Guangzhou Baiyun",
+    },
+    "CTU": {
+        "city_code": "CTU", "city_name": "成都", "country_id": 1,
+        "country_code": "CN", "country_name": "中国", "province_id": 23,
+        "city_id": 105, "timezone": 480,
+        "airport_name": "天府国际机场", "airport_name_en": "Chengdu Tianfu",
+    },
+    "HKG": {
+        "city_code": "HKG", "city_name": "香港", "country_id": 1,
+        "country_code": "CN", "country_name": "中国", "province_id": 30,
+        "city_id": 57, "timezone": 480,
+        "airport_name": "香港国际机场", "airport_name_en": "Hong Kong",
+    },
+    "SIN": {
+        "city_code": "SIN", "city_name": "新加坡", "country_id": 154,
+        "country_code": "SG", "country_name": "新加坡", "province_id": 0,
+        "city_id": 165, "timezone": 480,
+        "airport_name": "樟宜机场", "airport_name_en": "Singapore Changi",
     },
 }
 
@@ -318,6 +361,33 @@ def _parse_flights_from_pull_response(payload: dict, origin: str, destination: s
         if transfer_count is None:
             transfer_count = max(len(flight_numbers) - 1, 0)
 
+        # 提取中转机场（用于甩尾检测）
+        via_airports = []
+        for seg in segments:
+            legs = seg.get("flightList") or []
+            for i, leg in enumerate(legs):
+                if not isinstance(leg, dict):
+                    continue
+                # 非最后一段的到达机场即为中转点
+                if i < len(legs) - 1:
+                    arr_code = (
+                        leg.get("arrivalAirportCode")
+                        or leg.get("arrivalAirport")
+                        or leg.get("toAirportCode")
+                        or leg.get("arrCode")
+                        or ""
+                    )
+                    if arr_code and arr_code not in via_airports:
+                        via_airports.append(arr_code.upper())
+            # 多 segment 时，segment 之间的转机点
+            if len(segments) > 1:
+                arr_code = (
+                    (first_leg.get("arrivalAirportCode") or "")
+                    if seg is segments[0] else ""
+                )
+                if arr_code and arr_code not in via_airports:
+                    via_airports.append(arr_code.upper())
+
         flights.append(
             {
                 "airline": first_leg.get("marketAirlineName") or first_leg.get("airlineName") or item.get("airlineName") or "携程",
@@ -327,8 +397,9 @@ def _parse_flights_from_pull_response(payload: dict, origin: str, destination: s
                 "price_cny": min(prices),
                 "origin": origin,
                 "destination": destination,
+                "stops": transfer_count,
+                "via": ",".join(via_airports),  # 中转机场列表，用于甩尾检测
                 "is_direct": transfer_count == 0,
-                "transfer_count": transfer_count,
                 "raw_order": idx,
             }
         )

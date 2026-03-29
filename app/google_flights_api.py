@@ -121,6 +121,8 @@ def _parse_result(result, origin, destination):
                 "price_cny": price_cny,
                 "origin": origin,
                 "destination": destination,
+                "stops": stops if isinstance(stops, int) else 0,
+                "via": "",  # Google 不提供中转机场代码
             })
         except Exception:
             continue

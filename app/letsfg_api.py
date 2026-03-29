@@ -191,6 +191,7 @@ def _parse_offers(payload, origin: str, destination: str) -> list[dict]:
                 "original_currency": offer_currency,
                 "origin": origin,
                 "destination": destination,
+                "via": "",  # LetsFG 不提供中转点信息
             }
         )
     dedup = {}
