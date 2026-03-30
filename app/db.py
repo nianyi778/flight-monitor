@@ -248,3 +248,157 @@ def cleanup_expired_pending_trips():
             log.info(f"🗑 清理过期 pending 行程: {deleted} 条")
     except Exception as e:
         log.warning(f"清理 pending 行程失败: {e}")
+
+
+# ─── Bot CRUD helpers ─────────────────────────────────────────────────────────
+# bot.py 不应内联 SQL；所有写操作都通过这里
+
+def set_trip_status(trip_id: int, status: str) -> bool:
+    """设置行程状态（active / paused / deleted）。返回是否找到了该行程。"""
+    try:
+        with get_db() as db:
+            cur = db.cursor()
+            cur.execute("UPDATE trips SET status=%s WHERE id=%s", (status, trip_id))
+            db.commit()
+            return cur.rowcount > 0
+    except Exception as e:
+        log.error(f"更新行程 #{trip_id} 状态失败: {e}")
+        return False
+
+
+def cancel_pending_trip(pending_id: int) -> None:
+    """直接删除一条 pending 行程（用户点击取消）。"""
+    try:
+        with get_db() as db:
+            cur = db.cursor()
+            cur.execute("DELETE FROM trips WHERE id=%s AND status='pending'", (pending_id,))
+            db.commit()
+    except Exception as e:
+        log.error(f"取消 pending 行程 #{pending_id} 失败: {e}")
+
+
+def get_trip_basic_info(trip_id) -> dict | None:
+    """获取行程基本字段（确认添加后展示用）。"""
+    try:
+        with get_db() as db:
+            cur = db.cursor()
+            cur.execute(
+                "SELECT id, origin, destination, outbound_date, return_date, budget, trip_type "
+                "FROM trips WHERE id=%s",
+                (trip_id,),
+            )
+            r = cur.fetchone()
+        if not r:
+            return None
+        return {
+            "id": r[0], "origin": r[1], "destination": r[2],
+            "outbound_date": str(r[3]),
+            "return_date": str(r[4]) if r[4] else None,
+            "budget": r[5], "trip_type": r[6] or "round_trip",
+        }
+    except Exception as e:
+        log.error(f"读取行程 #{trip_id} 基本信息失败: {e}")
+        return None
+
+
+def get_trip_for_edit(trip_id) -> dict | None:
+    """获取行程的完整编辑字段（日期/预算/时间窗/弹性）。"""
+    try:
+        with get_db() as db:
+            cur = db.cursor()
+            cur.execute(
+                "SELECT outbound_date, return_date, budget, "
+                "ob_depart_start, ob_depart_end, ob_arrive_start, ob_arrive_end, "
+                "rt_depart_start, rt_depart_end, rt_arrive_start, rt_arrive_end, "
+                "ob_flex, rt_flex FROM trips WHERE id=%s",
+                (trip_id,),
+            )
+            r = cur.fetchone()
+        if not r:
+            return None
+        return {
+            "outbound_date": r[0], "return_date": r[1], "budget": r[2],
+            "ob_depart_start": r[3], "ob_depart_end": r[4],
+            "ob_arrive_start": r[5], "ob_arrive_end": r[6],
+            "rt_depart_start": r[7], "rt_depart_end": r[8],
+            "rt_arrive_start": r[9], "rt_arrive_end": r[10],
+            "ob_flex": r[11] if r[11] is not None else 0,
+            "rt_flex": r[12] if r[12] is not None else 1,
+        }
+    except Exception as e:
+        log.error(f"读取行程 #{trip_id} 编辑信息失败: {e}")
+        return None
+
+
+def update_trip_budget(trip_id: int, budget: int) -> bool:
+    """更新行程预算。"""
+    try:
+        with get_db() as db:
+            cur = db.cursor()
+            cur.execute("UPDATE trips SET budget=%s WHERE id=%s", (budget, trip_id))
+            db.commit()
+            return cur.rowcount > 0
+    except Exception as e:
+        log.error(f"更新行程 #{trip_id} 预算失败: {e}")
+        return False
+
+
+def update_trip_dates(trip_id: int, ob_d: str, rt_d: str) -> bool:
+    """更新去程/回程日期。"""
+    try:
+        with get_db() as db:
+            cur = db.cursor()
+            cur.execute(
+                "UPDATE trips SET outbound_date=%s, return_date=%s WHERE id=%s",
+                (ob_d, rt_d, trip_id),
+            )
+            db.commit()
+            return cur.rowcount > 0
+    except Exception as e:
+        log.error(f"更新行程 #{trip_id} 日期失败: {e}")
+        return False
+
+
+def update_trip_flex(trip_id: int, ob_flex: int, rt_flex: int) -> bool:
+    """更新行程弹性天数。"""
+    try:
+        with get_db() as db:
+            cur = db.cursor()
+            cur.execute(
+                "UPDATE trips SET ob_flex=%s, rt_flex=%s WHERE id=%s",
+                (ob_flex, rt_flex, trip_id),
+            )
+            db.commit()
+            return cur.rowcount > 0
+    except Exception as e:
+        log.error(f"更新行程 #{trip_id} 弹性失败: {e}")
+        return False
+
+
+_TIME_WINDOW_COLS = {
+    "ob-dep": ("ob_depart_start", "ob_depart_end"),
+    "ob-arr": ("ob_arrive_start", "ob_arrive_end"),
+    "rt-dep": ("rt_depart_start", "rt_depart_end"),
+    "rt-arr": ("rt_arrive_start", "rt_arrive_end"),
+}
+
+
+def update_trip_time_windows(trip_id: int, windows: dict) -> bool:
+    """更新时间窗口，windows = {'ob-dep': (19, 23), 'rt-arr': (0, 6), ...}。"""
+    set_parts, vals = [], []
+    for key, (col_s, col_e) in _TIME_WINDOW_COLS.items():
+        if key in windows:
+            set_parts += [f"{col_s}=%s", f"{col_e}=%s"]
+            vals += list(windows[key])
+    if not set_parts:
+        return False
+    vals.append(trip_id)
+    try:
+        with get_db() as db:
+            cur = db.cursor()
+            cur.execute(f"UPDATE trips SET {', '.join(set_parts)} WHERE id=%s", vals)
+            db.commit()
+            return cur.rowcount > 0
+    except Exception as e:
+        log.error(f"更新行程 #{trip_id} 时间窗失败: {e}")
+        return False
