@@ -75,6 +75,15 @@ async def push_until_ack(msg, state):
     """
     from app.bot import ack_received_event
 
+    # 如果用户在进入此函数之前（通知发送→本函数调用之间的 await 窗口）
+    # 已经回复确认，event 已被设置，先检测再清除，否则会白等一个 PUSH_INTERVAL
+    if ack_received_event.is_set():
+        ack_received_event.clear()
+        state["pending_ack"] = False
+        save_state(state)
+        log.info("✅ 确认已预先收到（进入 push_until_ack 前），停止推送")
+        tg_send("✅ 已确认收到，停止推送。")
+        return
     ack_received_event.clear()
     push_count = 1
 

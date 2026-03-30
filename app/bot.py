@@ -942,14 +942,17 @@ async def tg_command_listener():
                 elif text == "/status":
                     _handle_status()
                 elif text == "/health":
-                    checks = _health_check()
-                    lines = ["🩺 *健康检查*\n"]
-                    lines.append(f"💾 数据库: {checks['db']}")
-                    lines.append(f"🏠 代理: {checks['proxy']}")
-                    lines.append(f"📱 TG Bot: {checks['tg']}")
-                    all_ok = all("✅" in str(v) for v in checks.values())
-                    lines.append(f"\n{'✅ 全部正常' if all_ok else '⚠️ 部分异常'}")
-                    tg_send("\n".join(lines))
+                    # _health_check() 含同步 HTTP 请求，不能在事件循环中直接调用
+                    async def _run_health():
+                        checks = await asyncio.to_thread(_health_check)
+                        lines = ["🩺 *健康检查*\n"]
+                        lines.append(f"💾 数据库: {checks['db']}")
+                        lines.append(f"🏠 代理: {checks['proxy']}")
+                        lines.append(f"📱 TG Bot: {checks['tg']}")
+                        all_ok = all("✅" in str(v) for v in checks.values())
+                        lines.append(f"\n{'✅ 全部正常' if all_ok else '⚠️ 部分异常'}")
+                        tg_send("\n".join(lines))
+                    asyncio.ensure_future(_run_health())
                 elif text == "/history":
                     _handle_history()
                 elif text in ("/trips", "/trip list", "/trip", "/budget", "/start"):
