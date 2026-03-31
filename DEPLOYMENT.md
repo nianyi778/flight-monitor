@@ -19,14 +19,7 @@
 
 也可使用任意 MySQL 5.7+ 实例，端口默认 `3306`（TiDB Cloud 默认 `4000`）。
 
-## 第三步：准备 LLM API Key
-
-系统使用 `gpt-4o-mini` 对截图做视觉分析，需要支持 vision 的 OpenAI 兼容 API。
-
-- OpenAI 官方：`https://api.openai.com/v1`，在 [platform.openai.com](https://platform.openai.com) 创建 API Key
-- 其他兼容服务（Azure OpenAI、第三方代理等）：填对应的 `LLM_BASE_URL` 和 `LLM_API_KEY` 即可
-
-## 第四步：部署容器
+## 第三步：部署容器
 
 ```bash
 # 1. 克隆仓库
@@ -37,7 +30,7 @@ cd flight-monitor-docker
 cp .env.example .env
 
 # 3. 编辑 .env，填入真实值
-#    必填：LLM_BASE_URL / LLM_API_KEY / TG_BOT_TOKEN / TG_CHAT_ID / DB_HOST / DB_USER / DB_PASSWORD
+#    必填：TG_BOT_TOKEN / TG_CHAT_ID / DB_HOST / DB_USER / DB_PASSWORD
 vim .env
 
 # 4. 启动
@@ -54,7 +47,7 @@ docker compose logs -f
 📋 监控行程: 0 个
 ```
 
-## 第五步：建表 SQL
+## 第四步：建表 SQL
 
 ### 全新部署（首次执行）
 
@@ -173,7 +166,7 @@ ALTER TABLE flight_prices ADD COLUMN via VARCHAR(50) AFTER flight_date;
 --     DROP COLUMN direct_only;
 ```
 
-## 第六步：添加监控行程
+## 第五步：添加监控行程
 
 容器启动后，在 Telegram 与 Bot 对话：
 
@@ -197,7 +190,7 @@ ALTER TABLE flight_prices ADD COLUMN via VARCHAR(50) AFTER flight_date;
 /health
 ```
 
-## 第七步：验证部署
+## 第六步：验证部署
 
 ```bash
 # HTTP 健康检查（返回 200 表示正常，503 表示 DB 异常）
@@ -221,14 +214,11 @@ curl http://localhost:8081/health
 
 | 变量 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
-| `LLM_BASE_URL` | ✅ | — | LLM API 地址（OpenAI 兼容） |
-| `LLM_API_KEY` | ✅ | — | LLM API Key |
-| `LLM_MODEL` | | `gpt-4o-mini` | 仅供 health check 连通性测试；实际截图分析固定使用 `gpt-4o-mini` |
 | `TG_BOT_TOKEN` | ✅ | — | Telegram Bot Token |
 | `TG_CHAT_ID` | ✅ | — | Telegram 私聊 Chat ID |
 | `TG_GROUP_IDS` | | — | 群聊 Chat ID（逗号分隔，如 `-100123,-100456`） |
 | `DB_HOST` | ✅ | — | TiDB/MySQL 主机 |
-| `DB_PORT` | | `4000` | 端口 |
+| `DB_PORT` | | `4000` | 端口（MySQL 默认 3306，TiDB Cloud 默认 4000） |
 | `DB_USER` | ✅ | — | 数据库用户 |
 | `DB_PASSWORD` | ✅ | — | 数据库密码 |
 | `DB_NAME` | | `flight_monitor` | 数据库名 |
