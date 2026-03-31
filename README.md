@@ -109,6 +109,7 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 
 | 版本 | 主要更新 |
 |------|---------|
+| v6.22 | 修复 get_cheapest_flights 返回历史无关日期数据的 bug（JOIN trips 表按 flight_date ± flex 过滤） |
 | v6.21 | Chrome healthcheck（CDP 端口 9222 探活）；Google 覆盖降级 Telegram 告警 |
 | v6.20 | spring_api 自动识别 NGO 出发切换 IsIJFlight=true，接入春秋日本(IJ)；扩展 _AIRPORT_NAMES |
 | v6.19 | 修复 Google Flights flex 日期 bug（Google 搜索 URL 未随弹性日期循环生成，导致非基准日价格盲区） |
