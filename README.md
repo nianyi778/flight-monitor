@@ -8,9 +8,9 @@
 app/
 ├── config.py             # 配置 & 常量 & 时区(JST)
 ├── db.py                 # TiDB 数据层
-├── letsfg_api.py         # LetsFG CLI/SDK 聚合搜索
-├── google_flights_api.py # Google Flights fast-flights protobuf
-├── spring_api.py         # 春秋航空官网 API 直连
+├── kiwi_api.py           # Kiwi GraphQL 聚合搜索
+├── google_flights_api.py # Google Flights（CDP 连接 Chrome sidecar）
+├── spring_api.py         # 春秋航空官网 API 直连（9C + IJ）
 ├── matcher.py            # 弹性日期搜索 + 航班组合匹配
 ├── notifier.py           # Telegram 通知 & 消息格式化
 ├── bot.py                # TG Bot 交互（Inline Keyboard）
@@ -24,23 +24,36 @@ app/
 
 | 数据源 | 方式 | 成本 | 覆盖 |
 |--------|------|------|------|
-| 春秋航空官网 | REST API 直连 | 零 | 春秋(9C/IJ) 直销价 |
-| LetsFG | CLI/SDK（100+ connectors + 可选 GDS/NDC） | 免费 | 多航司聚合价 |
-| 携程 | browser DOM（CDP 连接 Chrome sidecar） | 零 | 全航司 OTA 价 |
-| Google Flights | fast-flights protobuf 逆向，纯 HTTP | 零 | 全航司日本站价 |
+| 春秋航空官网 | REST API 直连 | 零 | 春秋中国(9C) + 春秋日本(IJ) 直销价 |
+| Kiwi.com | GraphQL API，零认证 | 零 | MU/CA/NH/CZ/HO/FM/9C/IJ 等多航司 |
+| Google Flights | CDP 驱动 Chrome sidecar | 零 | 全航司（含 JAL/Peach/GK） |
 
-> **携程依赖**：需要 Chrome sidecar 容器（compose 内 `flight-chrome`）+ 有效的 `ctrip_batch_profile.json`。profile 失效时运行 `capture_real_chrome.sh` 重新捕获。
+> **Google 覆盖说明**：JAL(JL)、乐桃(MM)、捷星日本(GK) 仅通过 Google Flights 覆盖。Chrome sidecar 不可用时系统会自动推送 Telegram 降级告警，Spring + Kiwi 渠道不受影响。
 
 ### 机场覆盖
 
-|  | PVG(浦东) |
-|--|-----------|
-| NRT(成田) | LetsFG + Google + 春秋 |
-| HND(羽田) | LetsFG + Google + 春秋 |
+| 出发 \ 到达 | PVG(浦东) | SHA(虹桥) | PEK(首都) |
+|------------|-----------|-----------|-----------|
+| NRT(成田) | Spring + Kiwi + Google | Spring + Kiwi + Google | Kiwi + Google |
+| HND(羽田) | Spring + Kiwi + Google | Spring + Kiwi + Google | Kiwi + Google |
+| NGO(名古屋) | Spring(IJ) + Google | Google | Google |
+| KIX(关西) | Kiwi + Google | Kiwi + Google | Kiwi + Google |
 
 ### 航司覆盖
 
-春秋(9C/IJ)、捷星(GK)、乐桃(MM)、东航(MU)、上航(FM)、国航(CA)、南航(CZ)、吉祥(HO)、ANA(NH)、JAL(JL)
+| 航司 | Spring | Kiwi | Google |
+|------|:------:|:----:|:------:|
+| 春秋中国 9C | ✅ | ✅ | ✅ |
+| 春秋日本 IJ | ✅(NGO) | ✅ | ✅ |
+| 东航 MU | — | ✅ | ✅ |
+| 国航 CA | — | ✅ | ✅ |
+| 南航 CZ | — | ✅ | ✅ |
+| 吉祥 HO | — | ✅ | ✅ |
+| 上航 FM | — | ✅ | ✅ |
+| ANA NH | — | ✅ | ✅ |
+| JAL JL | — | — | ✅ |
+| 乐桃 MM | — | — | ✅ |
+| 捷星日本 GK | — | — | ✅ |
 
 ### 智能调度
 
@@ -49,6 +62,7 @@ app/
 - **弹性日期**：自动搜索目标日期 ±N 天，找最便宜的组合
 - **源健康管理**：连续失败自动冷却，恢复后自动重启
 - **时间窗过滤**：去程/回程各设时间窗，无时间信息的航班直接收录不丢弃
+- **覆盖降级告警**：Google/Chrome 不可用时推送 Telegram 告警（每小时最多一次）
 
 ### TG Bot 交互
 
@@ -87,32 +101,21 @@ docker compose pull && docker compose up -d --force-recreate flight-monitor
 
 # 本地构建（多架构推送）
 docker buildx build --platform linux/amd64,linux/arm64 \
-  --output type=image,name=ghcr.io/nianyi778/flight-monitor:v5.0,push=true \
+  --output type=image,name=ghcr.io/nianyi778/flight-monitor:v6.21,push=true \
   --network host .
 ```
-
-## LetsFG
-
-可选增强源。在 Docker 镜像内已内置 `letsfg`、`playwright` 和 Chromium，本地 connectors 可直接运行。
-
-环境变量：
-```bash
-LETSFG_API_KEY=trav_xxx   # 可选；有值则优先走 letsfg search（云端）
-LETSFG_MODE=auto          # auto/local/cloud
-LETSFG_TIMEOUT=90
-```
-
-如配置 `LETSFG_API_KEY`，优先走 `letsfg search`；否则默认走 `letsfg search-local`。
 
 ## 版本历史
 
 | 版本 | 主要更新 |
 |------|---------|
-| v5.0 | 移除携程数据源（接口下线）；修复 LetsFG 无时间信息航班被过滤导致"无数据"；Google Flights import 错误不再缓存；移除镜像中 agent-browser 和 COPY data/；fast-flights 固定 <3.0 |
-| v4.9 | LetsFG 多 connector 聚合；源健康管理优化 |
-| v4.3 | 移除截图+LLM兜底；Google 适配 fast-flights v2.2 新接口 |
-| v4.2 | 携程降级链重构 |
-| v3.9 | 新增 GET /health HTTP 端点 |
+| v6.21 | Chrome healthcheck（CDP 端口 9222 探活）；Google 覆盖降级 Telegram 告警 |
+| v6.20 | spring_api 自动识别 NGO 出发切换 IsIJFlight=true，接入春秋日本(IJ)；扩展 _AIRPORT_NAMES |
+| v6.19 | 修复 Google Flights flex 日期 bug（Google 搜索 URL 未随弹性日期循环生成，导致非基准日价格盲区） |
+| v6.18 | bot.py 文本命令重构：内联 200 行替换为 asyncio.to_thread(_dispatch_text_command) |
+| v6.9 | 引入 Kiwi.com GraphQL 渠道替换 ctrip/letsfg |
+| v6.0 | 多机场/城市路由；ob_flex/rt_flex 弹性天数；max_stops 经停过滤；throwaway 甩尾检测 |
+| v5.0 | 移除携程数据源；修复 LetsFG 无时间信息航班被过滤；Google Flights import 错误不再缓存 |
 | v3.5 | 春秋航空官网 API 直连 |
 | v3.2 | 智能调度：日期去重 + 分频检查 |
 | v3.1 | MCP Server 集成 |

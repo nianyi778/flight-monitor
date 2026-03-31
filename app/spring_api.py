@@ -34,9 +34,21 @@ _WARMUP_URL = "https://www.ch.com/"
 _AIRPORT_NAMES = {
     "NRT": "东京(成田)",
     "HND": "东京(羽田)",
+    "NGO": "名古屋",
     "PVG": "上海浦东",
     "SHA": "上海虹桥",
+    "PEK": "北京首都",
+    "PKX": "北京大兴",
+    "CAN": "广州",
+    "CTU": "成都",
+    "KIX": "大阪(关西)",
+    "ITM": "大阪(伊丹)",
+    "CTS": "札幌",
+    "FUK": "福冈",
 }
+
+# Spring Japan (IJ) 运营的出发机场 — 使用 IsIJFlight=true
+_IJ_ORIGINS = {"NGO"}
 
 # USD/JPY → CNY 汇率（启动时为默认值，每日从免费API刷新）
 USD_TO_CNY = 7.2
@@ -99,6 +111,8 @@ def fetch_spring_prices(origin, destination, year_month, session=None, _cache=No
     dep_name = _AIRPORT_NAMES.get(origin, origin)
     arr_name = _AIRPORT_NAMES.get(destination, destination)
 
+    # Spring Japan (IJ) 出发机场自动切换标志
+    is_ij = origin in _IJ_ORIGINS
     data = {
         "Currency": "0",  # 中文站返回 CNY
         "DepartureDate": dep_date,
@@ -107,7 +121,7 @@ def fetch_spring_prices(origin, destination, year_month, session=None, _cache=No
         "Days": "0",
         "IfRet": "false",
         "SType": "0",
-        "IsIJFlight": "false",
+        "IsIJFlight": "true" if is_ij else "false",
         "ActId": "",
         "IsReturn": "false",
         "IsShowTaxprice": "true",

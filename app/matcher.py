@@ -125,22 +125,22 @@ def get_search_urls(trip):
                     "throwaway_for": None,
                 })
 
-            # Google（每个路由对只搜主日期）
-            urls.append({
-                "name": f"Google_{pair_str}",
-                "direction": direction,
-                "label": f"{dir_label} {pair_label} {base_date} [Google]",
-                "url": (
-                    f"https://www.google.co.jp/travel/flights"
-                    f"#flt={orig}.{dest}.{base_date};c:JPY;e:1;sd:1;t:f"
-                ),
-                "wait": 10,
-                "flight_date": base_date,
-                "origin": orig,
-                "destination": dest,
-                "source_type": "google",
-                "throwaway_for": None,
-            })
+                # Google（与 Kiwi 同步覆盖所有弹性日期，避免漏掉非基准日的低价）
+                urls.append({
+                    "name": f"Google_{pair_str}{suffix}",
+                    "direction": direction,
+                    "label": f"{dir_label} {pair_label} {date} [Google]",
+                    "url": (
+                        f"https://www.google.co.jp/travel/flights"
+                        f"#flt={orig}.{dest}.{date};c:JPY;e:1;sd:1;t:f"
+                    ),
+                    "wait": 10,
+                    "flight_date": date,
+                    "origin": orig,
+                    "destination": dest,
+                    "source_type": "google",
+                    "throwaway_for": None,
+                })
 
     _add_urls(ob_pairs, "outbound", ob_dates)
     if not is_one_way:

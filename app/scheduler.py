@@ -374,6 +374,24 @@ async def _run_check_inner(force, all_trips, bot_module):
             all_analysis.update(fetched)
             _record_results_for_source(state, "google_api", fetched, remaining)
 
+        # 覆盖降级告警：Google 不可用时 JAL/Peach/GK 价格盲区，每小时最多一次
+        google_health = get_source_status_snapshot(state).get("google_api", {})
+        if google_health.get("status") in ("cooldown", "degraded"):
+            from datetime import datetime as _dt
+            last_alert_str = state.get("_google_coverage_alert_at")
+            last_alert = _dt.fromisoformat(last_alert_str) if last_alert_str else None
+            if last_alert is None or (now_jst() - last_alert).total_seconds() > 3600:
+                reason = google_health.get("last_block_reason") or "Chrome/CDP 连接失败"
+                tg_send(
+                    "⚠️ *Google Flights 覆盖降级*\n"
+                    "Chrome 容器不可用，以下航司价格暂时无法监控：\n"
+                    "• JAL (JL)\n• Peach Aviation (MM)\n• Jetstar Japan (GK)\n\n"
+                    f"原因: `{reason}`\n"
+                    "Spring + Kiwi 渠道仍正常运行。"
+                )
+                state["_google_coverage_alert_at"] = now_jst().isoformat()
+                log.warning(f"⚠️ Google 覆盖降级告警已推送: {reason}")
+
     # 汇总日志
     got = sum(1 for a in all_analysis.values() if a.get("flights"))
     log.info(f"  📊 API结果: {got}/{len(unique_searches)} 个搜索有航班数据")
