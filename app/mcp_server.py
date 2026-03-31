@@ -557,21 +557,31 @@ def get_cheapest_flights(trip_id: int = None, direction: str = "outbound", limit
         direction: outbound（去程）或 return（回程）
         limit: 返回条数
     """
-    where = "WHERE direction=%s"
-    params = [direction]
-    if trip_id:
-        where += " AND trip_id=%s"
-        params.append(trip_id)
-    params.append(limit)
-
     with get_db() as db:
         c = db.cursor()
-        c.execute(
-            f"SELECT check_time, airline, flight_no, departure_time, arrival_time, "
-            f"price_cny, original_price, original_currency, origin, destination, flight_date "
-            f"FROM flight_prices {where} ORDER BY price_cny ASC LIMIT %s",
-            params
-        )
+        if trip_id:
+            # JOIN trips 表，按行程的目标日期 ± flex 过滤 flight_date，避免返回历史不相关日期的记录
+            date_col = "outbound_date" if direction == "outbound" else "return_date"
+            flex_col = "ob_flex" if direction == "outbound" else "rt_flex"
+            c.execute(
+                f"SELECT fp.check_time, fp.airline, fp.flight_no, fp.departure_time, fp.arrival_time, "
+                f"fp.price_cny, fp.original_price, fp.original_currency, fp.origin, fp.destination, fp.flight_date "
+                f"FROM flight_prices fp "
+                f"JOIN trips t ON fp.trip_id = t.id "
+                f"WHERE fp.direction=%s AND fp.trip_id=%s "
+                f"AND fp.flight_date BETWEEN "
+                f"  DATE_SUB(t.{date_col}, INTERVAL COALESCE(t.{flex_col}, 0) DAY) "
+                f"  AND DATE_ADD(t.{date_col}, INTERVAL COALESCE(t.{flex_col}, 0) DAY) "
+                f"ORDER BY fp.price_cny ASC LIMIT %s",
+                (direction, trip_id, limit)
+            )
+        else:
+            c.execute(
+                "SELECT check_time, airline, flight_no, departure_time, arrival_time, "
+                "price_cny, original_price, original_currency, origin, destination, flight_date "
+                "FROM flight_prices WHERE direction=%s ORDER BY price_cny ASC LIMIT %s",
+                (direction, limit)
+            )
         rows = c.fetchall()
 
     return {
