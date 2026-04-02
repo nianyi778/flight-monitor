@@ -10,7 +10,7 @@ from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from app.config import now_jst, log, load_state
+from app.config import now_jst, log, load_state, MCP_AUTH_TOKEN
 from app.db import get_db, get_active_trips
 from app.source_runtime import (
     ensure_runtime_state,
@@ -31,6 +31,16 @@ mcp = FastMCP(
 )
 
 
+@mcp.custom_route("/mcp", methods=["POST", "GET"])
+async def mcp_auth_gate(request: Request) -> JSONResponse | None:
+    if not MCP_AUTH_TOKEN:
+        return None
+    auth = request.headers.get("authorization", "")
+    if auth == f"Bearer {MCP_AUTH_TOKEN}":
+        return None
+    return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+
 def _format_dt(value) -> str | None:
     if not value:
         return None
@@ -47,8 +57,11 @@ def _normalize_days(days: int) -> int:
     return min(max(days_value, 1), 90)
 
 
-def _validate_trip_fields(payload: dict, existing_trip: dict | None = None) -> dict | None:
+def _validate_trip_fields(
+    payload: dict, existing_trip: dict | None = None
+) -> dict | None:
     """校验 MCP 写入 trips 的字段。返回错误 dict，成功返回 None。"""
+
     def _ex(key, default=None):
         return existing_trip.get(key) if existing_trip else default
 
@@ -85,8 +98,14 @@ def _validate_trip_fields(payload: dict, existing_trip: dict | None = None) -> d
 
     # 校验 8 个时间窗（NULL = 不过滤该维度）
     time_windows = [
-        "ob_depart_start", "ob_depart_end", "ob_arrive_start", "ob_arrive_end",
-        "rt_depart_start", "rt_depart_end", "rt_arrive_start", "rt_arrive_end",
+        "ob_depart_start",
+        "ob_depart_end",
+        "ob_arrive_start",
+        "ob_arrive_end",
+        "rt_depart_start",
+        "rt_depart_end",
+        "rt_arrive_start",
+        "rt_arrive_end",
     ]
     for name in time_windows:
         value = payload.get(name)
@@ -106,7 +125,9 @@ def _validate_trip_fields(payload: dict, existing_trip: dict | None = None) -> d
         if s is not None and e is not None and int(s) > int(e):
             return {"error": f"{prefix} 时间窗口起始不能大于结束"}
 
-    flex_fields = {"outbound_flex": payload.get("outbound_flex", _ex("outbound_flex", 0))}
+    flex_fields = {
+        "outbound_flex": payload.get("outbound_flex", _ex("outbound_flex", 0))
+    }
     if trip_type == "round_trip":
         flex_fields["return_flex"] = payload.get("return_flex", _ex("return_flex", 1))
     for name, value in flex_fields.items():
@@ -195,12 +216,22 @@ def list_trips() -> dict:
                 "return_date": t.get("return_date"),
                 "budget_cny": t["budget"],
                 "best_price_cny": t.get("best_price"),
-                "ob_depart_window": _window(t.get("ob_depart_start"), t.get("ob_depart_end")),
-                "ob_arrive_window": _window(t.get("ob_arrive_start"), t.get("ob_arrive_end")),
-                "rt_depart_window": _window(t.get("rt_depart_start"), t.get("rt_depart_end")),
-                "rt_arrive_window": _window(t.get("rt_arrive_start"), t.get("rt_arrive_end")),
+                "ob_depart_window": _window(
+                    t.get("ob_depart_start"), t.get("ob_depart_end")
+                ),
+                "ob_arrive_window": _window(
+                    t.get("ob_arrive_start"), t.get("ob_arrive_end")
+                ),
+                "rt_depart_window": _window(
+                    t.get("rt_depart_start"), t.get("rt_depart_end")
+                ),
+                "rt_arrive_window": _window(
+                    t.get("rt_arrive_start"), t.get("rt_arrive_end")
+                ),
                 "outbound_flex_days": t.get("outbound_flex", 0),
-                "return_flex_days": t.get("return_flex") if t.get("trip_type") != "one_way" else None,
+                "return_flex_days": t.get("return_flex")
+                if t.get("trip_type") != "one_way"
+                else None,
                 "max_stops": t.get("max_stops"),
                 "throwaway": t.get("throwaway", False),
             }
@@ -287,10 +318,16 @@ def add_trip(
             "ob_flex, rt_flex, max_stops, throwaway) "
             "VALUES (%s,%s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s,%s)",
             (
-                origin.upper(), destination.upper(),
-                outbound_date, None if is_one_way else return_date,
-                budget, trip_type,
-                ob_depart_start, ob_depart_end, ob_arrive_start, ob_arrive_end,
+                origin.upper(),
+                destination.upper(),
+                outbound_date,
+                None if is_one_way else return_date,
+                budget,
+                trip_type,
+                ob_depart_start,
+                ob_depart_end,
+                ob_arrive_start,
+                ob_arrive_end,
                 None if is_one_way else rt_depart_start,
                 None if is_one_way else rt_depart_end,
                 None if is_one_way else rt_arrive_start,
@@ -299,7 +336,7 @@ def add_trip(
                 None if is_one_way else return_flex,
                 max_stops,
                 1 if throwaway else 0,
-            )
+            ),
         )
         db.commit()
         new_id = c.lastrowid
@@ -411,7 +448,7 @@ def edit_trip(
         "rt_arrive": ["rt_arrive_start", "rt_arrive_end"],
         "max_stops": ["max_stops"],
     }
-    for token in (clear_filters or []):
+    for token in clear_filters or []:
         for col in _clear_map.get(token, []):
             updates[col] = None
 
@@ -425,8 +462,12 @@ def edit_trip(
         return {"error": f"行程#{trip_id}不存在或不是active状态"}
 
     effective_type = trip_type or existing_trip.get("trip_type", "round_trip")
-    switching_to_one_way = (effective_type == "one_way" and existing_trip.get("trip_type") != "one_way")
-    switching_to_round_trip = (effective_type == "round_trip" and existing_trip.get("trip_type") == "one_way")
+    switching_to_one_way = (
+        effective_type == "one_way" and existing_trip.get("trip_type") != "one_way"
+    )
+    switching_to_round_trip = (
+        effective_type == "round_trip" and existing_trip.get("trip_type") == "one_way"
+    )
     if switching_to_round_trip and not return_date:
         return {"error": "切换为往返行程时必须同时提供回程日期 (return_date)"}
     if switching_to_one_way:
@@ -438,10 +479,22 @@ def edit_trip(
         updates["rt_flex"] = None
 
     validate_payload = {"trip_type": effective_type}
-    for k in ("outbound_date", "return_date", "budget",
-               "ob_depart_start", "ob_depart_end", "ob_arrive_start", "ob_arrive_end",
-               "rt_depart_start", "rt_depart_end", "rt_arrive_start", "rt_arrive_end",
-               "ob_flex", "rt_flex", "max_stops"):
+    for k in (
+        "outbound_date",
+        "return_date",
+        "budget",
+        "ob_depart_start",
+        "ob_depart_end",
+        "ob_arrive_start",
+        "ob_arrive_end",
+        "rt_depart_start",
+        "rt_depart_end",
+        "rt_arrive_start",
+        "rt_arrive_end",
+        "ob_flex",
+        "rt_flex",
+        "max_stops",
+    ):
         if k in updates:
             validate_payload[k] = updates[k]
 
@@ -454,12 +507,18 @@ def edit_trip(
 
     with get_db() as db:
         c = db.cursor()
-        c.execute(f"UPDATE trips SET {set_clause} WHERE id=%s AND status='active'", values)
+        c.execute(
+            f"UPDATE trips SET {set_clause} WHERE id=%s AND status='active'", values
+        )
         affected = c.rowcount
         db.commit()
 
     if affected:
-        return {"success": True, "trip_id": trip_id, "updated_fields": list(updates.keys())}
+        return {
+            "success": True,
+            "trip_id": trip_id,
+            "updated_fields": list(updates.keys()),
+        }
     else:
         return {"error": f"行程#{trip_id}不存在或不是active状态"}
 
@@ -482,7 +541,10 @@ def pause_trip(trip_id: int) -> dict:
     """暂停监控一个行程。"""
     with get_db() as db:
         c = db.cursor()
-        c.execute("UPDATE trips SET status='paused' WHERE id=%s AND status='active'", (trip_id,))
+        c.execute(
+            "UPDATE trips SET status='paused' WHERE id=%s AND status='active'",
+            (trip_id,),
+        )
         affected = c.rowcount
         db.commit()
     if affected:
@@ -495,7 +557,10 @@ def resume_trip(trip_id: int) -> dict:
     """恢复监控一个已暂停的行程。"""
     with get_db() as db:
         c = db.cursor()
-        c.execute("UPDATE trips SET status='active' WHERE id=%s AND status='paused'", (trip_id,))
+        c.execute(
+            "UPDATE trips SET status='active' WHERE id=%s AND status='paused'",
+            (trip_id,),
+        )
         affected = c.rowcount
         db.commit()
     if affected:
@@ -519,14 +584,14 @@ def get_price_history(trip_id: int = None, limit: int = 20) -> dict:
                 "SELECT check_time, best_total, outbound_lowest, return_lowest, "
                 "best_outbound_airline, best_return_airline "
                 "FROM check_summary WHERE trip_id=%s ORDER BY check_time DESC LIMIT %s",
-                (trip_id, limit)
+                (trip_id, limit),
             )
         else:
             c.execute(
                 "SELECT check_time, best_total, outbound_lowest, return_lowest, "
                 "best_outbound_airline, best_return_airline, trip_id "
                 "FROM check_summary ORDER BY check_time DESC LIMIT %s",
-                (limit,)
+                (limit,),
             )
         rows = c.fetchall()
 
@@ -548,7 +613,9 @@ def get_price_history(trip_id: int = None, limit: int = 20) -> dict:
 
 
 @mcp.tool()
-def get_cheapest_flights(trip_id: int = None, direction: str = "outbound", limit: int = 10) -> dict:
+def get_cheapest_flights(
+    trip_id: int = None, direction: str = "outbound", limit: int = 10
+) -> dict:
     """
     查询最便宜的航班记录。
 
@@ -573,14 +640,14 @@ def get_cheapest_flights(trip_id: int = None, direction: str = "outbound", limit
                 f"  DATE_SUB(t.{date_col}, INTERVAL COALESCE(t.{flex_col}, 0) DAY) "
                 f"  AND DATE_ADD(t.{date_col}, INTERVAL COALESCE(t.{flex_col}, 0) DAY) "
                 f"ORDER BY fp.price_cny ASC LIMIT %s",
-                (direction, trip_id, limit)
+                (direction, trip_id, limit),
             )
         else:
             c.execute(
                 "SELECT check_time, airline, flight_no, departure_time, arrival_time, "
                 "price_cny, original_price, original_currency, origin, destination, flight_date "
                 "FROM flight_prices WHERE direction=%s ORDER BY price_cny ASC LIMIT %s",
-                (direction, limit)
+                (direction, limit),
             )
         rows = c.fetchall()
 
@@ -627,8 +694,9 @@ def health_check() -> dict:
     # Proxy
     if PROXY_URL:
         try:
-            r = requests.get("https://httpbin.org/ip",
-                proxies={"https": PROXY_URL}, timeout=10)
+            r = requests.get(
+                "https://httpbin.org/ip", proxies={"https": PROXY_URL}, timeout=10
+            )
             checks["proxy"] = {"status": "ok", "exit_ip": r.json().get("origin")}
         except Exception as e:
             checks["proxy"] = {"status": "error", "error": str(e)}
@@ -687,9 +755,15 @@ def get_system_info() -> dict:
             "Google Flights JP NRT⇄PVG (JPY)",
         ],
         "covered_airlines": [
-            "春秋航空(9C/IJ)", "捷星(GK)", "乐桃(MM)",
-            "东航(MU)", "国航(CA)", "吉祥(HO)",
-            "ANA(NH)", "JAL(JL)", "上航(FM)",
+            "春秋航空(9C/IJ)",
+            "捷星(GK)",
+            "乐桃(MM)",
+            "东航(MU)",
+            "国航(CA)",
+            "吉祥(HO)",
+            "ANA(NH)",
+            "JAL(JL)",
+            "上航(FM)",
         ],
     }
 
@@ -809,15 +883,17 @@ def get_metrics_history(days: int = 7, trip_id: int = None) -> dict:
     for row in daily_checks_rows:
         checks = int(row[1] or 0)
         checks_with_result = int(row[2] or 0)
-        daily_checks.append({
-            "day": str(row[0]),
-            "checks": checks,
-            "checks_with_result": checks_with_result,
-            "result_rate": round(checks_with_result / checks, 4) if checks else 0,
-            "avg_flights_found": float(row[3]) if row[3] is not None else None,
-            "min_best_total": row[4],
-            "avg_best_total": float(row[5]) if row[5] is not None else None,
-        })
+        daily_checks.append(
+            {
+                "day": str(row[0]),
+                "checks": checks,
+                "checks_with_result": checks_with_result,
+                "result_rate": round(checks_with_result / checks, 4) if checks else 0,
+                "avg_flights_found": float(row[3]) if row[3] is not None else None,
+                "min_best_total": row[4],
+                "avg_best_total": float(row[5]) if row[5] is not None else None,
+            }
+        )
 
     source_coverage = [
         {
@@ -857,10 +933,16 @@ def get_metrics_history(days: int = 7, trip_id: int = None) -> dict:
         "summary": {
             "checks": total_checks,
             "checks_with_result": total_checks_with_result,
-            "result_rate": round(total_checks_with_result / total_checks, 4) if total_checks else 0,
-            "avg_flights_found": float(summary_totals[2]) if summary_totals and summary_totals[2] is not None else None,
+            "result_rate": round(total_checks_with_result / total_checks, 4)
+            if total_checks
+            else 0,
+            "avg_flights_found": float(summary_totals[2])
+            if summary_totals and summary_totals[2] is not None
+            else None,
             "min_best_total": summary_totals[3] if summary_totals else None,
-            "avg_best_total": float(summary_totals[4]) if summary_totals and summary_totals[4] is not None else None,
+            "avg_best_total": float(summary_totals[4])
+            if summary_totals and summary_totals[4] is not None
+            else None,
         },
         "daily_checks": daily_checks,
         "source_coverage": source_coverage,
@@ -885,10 +967,13 @@ def resource_active_trips() -> str:
         best = f"¥{t['best_price']:,}" if t.get("best_price") else "暂无数据"
         is_one_way = t.get("trip_type") == "one_way"
         type_tag = "[单程]" if is_one_way else ""
-        date_str = t["outbound_date"] if is_one_way else f"{t['outbound_date']} → {t.get('return_date', '?')}"
+        date_str = (
+            t["outbound_date"]
+            if is_one_way
+            else f"{t['outbound_date']} → {t.get('return_date', '?')}"
+        )
         lines.append(
-            f"行程#{t['id']}{type_tag}: {date_str} "
-            f"预算¥{t['budget']:,} 最低{best}"
+            f"行程#{t['id']}{type_tag}: {date_str} 预算¥{t['budget']:,} 最低{best}"
         )
     return "\n".join(lines)
 
@@ -912,6 +997,7 @@ def resource_system_status() -> str:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # HTTP /health 端点（供外部监控轮询）
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 
 @mcp.custom_route("/health", methods=["GET"])
 async def http_health(request: Request) -> JSONResponse:

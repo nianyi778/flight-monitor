@@ -15,6 +15,7 @@ def _jpy_to_cny(price_jpy):
     """日元 → 人民币，使用 spring_api 的汇率缓存"""
     try:
         from app.spring_api import get_exchange_rates
+
         _, jpy_cny = get_exchange_rates()
         return round(price_jpy * jpy_cny)
     except Exception:
@@ -66,8 +67,11 @@ def _query_fast_flights(origin, destination, date_str):
     """
     try:
         from fast_flights import FlightData, Passengers, get_flights  # type: ignore[import]
+
         result = get_flights(
-            flight_data=[FlightData(date=date_str, from_airport=origin, to_airport=destination)],
+            flight_data=[
+                FlightData(date=date_str, from_airport=origin, to_airport=destination)
+            ],
             trip="one-way",
             passengers=Passengers(adults=1),
             seat="economy",
@@ -79,7 +83,7 @@ def _query_fast_flights(origin, destination, date_str):
         return None, e
 
 
-def _parse_result(result, origin, destination):
+def _parse_result(result, origin, destination, max_stops=None):
     """
     把 fast-flights v2 Result 对象转换为标准航班列表
     Flight 对象属性（v2.2）: name, departure, arrival, price, stops, duration
@@ -89,12 +93,22 @@ def _parse_result(result, origin, destination):
         return flights
 
     raw_flights = getattr(result, "flights", None) or []
+    allowed_stops = max_stops if max_stops is not None else 2
 
     for f in raw_flights:
         try:
             stops = getattr(f, "stops", 0)
-            # stops 可能是 int 0 或字符串 "Unknown"
-            if stops and str(stops) not in ("0", "Unknown"):
+            stops_int = 0
+            if isinstance(stops, int):
+                stops_int = stops
+            elif str(stops) == "Unknown":
+                stops_int = 0
+            else:
+                try:
+                    stops_int = int(stops)
+                except (ValueError, TypeError):
+                    stops_int = 0
+            if stops_int > allowed_stops:
                 continue
 
             name = getattr(f, "name", "") or ""
@@ -113,17 +127,19 @@ def _parse_result(result, origin, destination):
 
             price_cny = _jpy_to_cny(price_jpy)
 
-            flights.append({
-                "airline": name,
-                "flight_no": "",
-                "departure_time": dep_time,
-                "arrival_time": arr_time,
-                "price_cny": price_cny,
-                "origin": origin,
-                "destination": destination,
-                "stops": stops if isinstance(stops, int) else 0,
-                "via": "",  # Google 不提供中转机场代码
-            })
+            flights.append(
+                {
+                    "airline": name,
+                    "flight_no": "",
+                    "departure_time": dep_time,
+                    "arrival_time": arr_time,
+                    "price_cny": price_cny,
+                    "origin": origin,
+                    "destination": destination,
+                    "stops": stops_int,
+                    "via": "",  # Google 不提供中转机场代码
+                }
+            )
         except Exception:
             continue
 
@@ -145,22 +161,28 @@ def get_google_flights_for_searches(searches, proxy_url=None, proxy_id=None):
 
     try:
         import fast_flights  # noqa: F401
+
         # 检查 v2.x API 是否可用
         from fast_flights import FlightData, Passengers, get_flights  # noqa: F401
     except ImportError as _ie:
         log.warning(f"  ⚠️ fast-flights 库不可用: {_ie}（跳过 Google Flights，不缓存）")
-        return {s["url"]: {
-            "flights": [], "lowest_price": None,
-            "error": f"fast-flights 不可用: {_ie}",
-            "source": "GoogleAPI", "url": s["url"],
-            "flight_date": s.get("flight_date", ""),
-            "status": "degraded",
-            "block_reason": None,
-            "retryable": True,
-            "no_cache": True,  # 库错误不缓存，下次重试
-            "request_mode": "api",
-            "proxy_id": proxy_id,
-        } for s in searches}
+        return {
+            s["url"]: {
+                "flights": [],
+                "lowest_price": None,
+                "error": f"fast-flights 不可用: {_ie}",
+                "source": "GoogleAPI",
+                "url": s["url"],
+                "flight_date": s.get("flight_date", ""),
+                "status": "degraded",
+                "block_reason": None,
+                "retryable": True,
+                "no_cache": True,  # 库错误不缓存，下次重试
+                "request_mode": "api",
+                "proxy_id": proxy_id,
+            }
+            for s in searches
+        }
 
     results = {}
 
@@ -186,13 +208,16 @@ def get_google_flights_for_searches(searches, proxy_url=None, proxy_id=None):
 
         log.info(f"  🔍 Google Flights API: {origin}→{destination} {date_str}")
 
+        max_stops = s.get("max_stops")
         raw, query_error = _query_fast_flights(origin, destination, date_str)
-        flights = _parse_result(raw, origin, destination)
+        flights = _parse_result(raw, origin, destination, max_stops=max_stops)
 
         if flights:
             result["flights"] = flights
             result["lowest_price"] = flights[0]["price_cny"]
-            log.info(f"  ✓ Google API: {len(flights)} 个航班, 最低 ¥{result['lowest_price']}")
+            log.info(
+                f"  ✓ Google API: {len(flights)} 个航班, 最低 ¥{result['lowest_price']}"
+            )
         else:
             if query_error:
                 status, reason, retryable = classify_exception(query_error)
@@ -202,7 +227,9 @@ def get_google_flights_for_searches(searches, proxy_url=None, proxy_id=None):
                 result["error"] = f"Google Flights API: {query_error}"
             else:
                 result["error"] = "Google Flights API: 无数据（或被限流）"
-            log.warning(f"  ⚠️ Google Flights API: 无数据 {origin}→{destination} {date_str}")
+            log.warning(
+                f"  ⚠️ Google Flights API: 无数据 {origin}→{destination} {date_str}"
+            )
 
         results[url] = finalize_result_status(result)
 

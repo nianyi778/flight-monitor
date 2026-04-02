@@ -5,22 +5,62 @@
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 
+import pymysql
+from dbutils.pooled_db import PooledDB
+
 from app.config import (
-    DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME,
-    now_jst, log,
+    DB_HOST,
+    DB_PORT,
+    DB_USER,
+    DB_PASSWORD,
+    DB_NAME,
+    now_jst,
+    log,
 )
+
+_pool = None
+
+
+def _get_pool():
+    global _pool
+    if _pool is None and DB_HOST:
+        _pool = PooledDB(
+            creator=pymysql,
+            maxconnections=10,
+            mincached=2,
+            maxcached=5,
+            blocking=True,
+            host=DB_HOST,
+            port=DB_PORT,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME,
+            ssl={"ca": None},
+            ssl_verify_cert=True,
+            ssl_verify_identity=False,
+            charset="utf8mb4",
+        )
+    return _pool
 
 
 @contextmanager
 def get_db():
     """获取 TiDB 数据库连接（上下文管理器，异常时自动回滚并关闭）"""
-    import pymysql
-    conn = pymysql.connect(
-        host=DB_HOST, port=DB_PORT, user=DB_USER,
-        password=DB_PASSWORD, database=DB_NAME,
-        ssl={"ca": None}, ssl_verify_cert=False,
-        ssl_verify_identity=False, charset="utf8mb4",
-    )
+    pool = _get_pool()
+    if pool:
+        conn = pool.connection()
+    else:
+        conn = pymysql.connect(
+            host=DB_HOST,
+            port=DB_PORT,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME,
+            ssl={"ca": None},
+            ssl_verify_cert=True,
+            ssl_verify_identity=False,
+            charset="utf8mb4",
+        )
     try:
         yield conn
     except Exception:
@@ -56,21 +96,21 @@ def get_active_trips():
                 "best_price": r[4],
                 # 去程时间窗（NULL = 不过滤该维度）
                 "ob_depart_start": r[5],
-                "ob_depart_end":   r[6],
+                "ob_depart_end": r[6],
                 "ob_arrive_start": r[7],
-                "ob_arrive_end":   r[8],
+                "ob_arrive_end": r[8],
                 # 回程时间窗（NULL = 不过滤）
                 "rt_depart_start": r[9],
-                "rt_depart_end":   r[10],
+                "rt_depart_end": r[10],
                 "rt_arrive_start": r[11],
-                "rt_arrive_end":   r[12],
-                "outbound_flex":   r[13] if r[13] is not None else 0,
-                "return_flex":     r[14],  # None for one_way
-                "trip_type":       r[15] or "round_trip",
-                "max_stops":       r[16],  # None=不限, 0=直飞, 1=最多1转
-                "throwaway":       bool(r[17]),
-                "origin":          r[18] or "TYO",
-                "destination":     r[19] or "PVG",
+                "rt_arrive_end": r[12],
+                "outbound_flex": r[13] if r[13] is not None else 0,
+                "return_flex": r[14],  # None for one_way
+                "trip_type": r[15] or "round_trip",
+                "max_stops": r[16],  # None=不限, 0=直飞, 1=最多1转
+                "throwaway": bool(r[17]),
+                "origin": r[18] or "TYO",
+                "destination": r[19] or "PVG",
             }
             for r in rows
         ]
@@ -84,8 +124,10 @@ def update_trip_best_price(trip_id, best_price):
     try:
         with get_db() as db:
             cur = db.cursor()
-            cur.execute("UPDATE trips SET best_price = LEAST(COALESCE(best_price, 99999), %s) WHERE id = %s",
-                        (best_price, trip_id))
+            cur.execute(
+                "UPDATE trips SET best_price = LEAST(COALESCE(best_price, 99999), %s) WHERE id = %s",
+                (best_price, trip_id),
+            )
             db.commit()
     except Exception as e:
         log.error(f"更新行程最低价失败: {e}")
@@ -107,7 +149,9 @@ def save_to_db(results, combos, trip):
             for direction in directions:
                 for src in results[direction]:
                     source_flight_date = src.get("flight_date") or (
-                        trip["outbound_date"] if direction == "outbound" else trip.get("return_date")
+                        trip["outbound_date"]
+                        if direction == "outbound"
+                        else trip.get("return_date")
                     )
                     for f in src.get("flights", []):
                         try:
@@ -117,30 +161,48 @@ def save_to_db(results, combos, trip):
                                  departure_time, arrival_time, origin, destination,
                                  price_cny, original_price, original_currency, stops, flight_date, via)
                                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                                (trip_id, now, direction,
-                                 src.get("source", "")[:30],
-                                 f.get("airline", "")[:50], f.get("flight_no", "")[:20],
-                                 f.get("departure_time", "")[:10], f.get("arrival_time", "")[:10],
-                                 f.get("origin", "")[:5], f.get("destination", "")[:5],
-                                 f.get("price_cny"), f.get("original_price"),
-                                 f.get("original_currency", "CNY")[:5],
-                                 f.get("stops", 0),
-                                 source_flight_date,
-                                 f.get("via", "")[:50] or None)
+                                (
+                                    trip_id,
+                                    now,
+                                    direction,
+                                    src.get("source", "")[:30],
+                                    f.get("airline", "")[:50],
+                                    f.get("flight_no", "")[:20],
+                                    f.get("departure_time", "")[:10],
+                                    f.get("arrival_time", "")[:10],
+                                    f.get("origin", "")[:5],
+                                    f.get("destination", "")[:5],
+                                    f.get("price_cny"),
+                                    f.get("original_price"),
+                                    f.get("original_currency", "CNY")[:5],
+                                    f.get("stops", 0),
+                                    source_flight_date,
+                                    f.get("via", "")[:50] or None,
+                                ),
                             )
                             flights_count += 1
                         except Exception as row_err:
                             skipped_count += 1
-                            log.warning(f"跳过异常行 ({src.get('source', '')}): {row_err}")
+                            log.warning(
+                                f"跳过异常行 ({src.get('source', '')}): {row_err}"
+                            )
 
             best = combos[0] if combos else {}
-            ob_lowest = min((s.get("lowest_price") or 99999 for s in results["outbound"]), default=None)
+            ob_lowest = min(
+                (s.get("lowest_price") or 99999 for s in results["outbound"]),
+                default=None,
+            )
             if is_one_way:
                 rt_lowest = None
-                best_total = best.get("total") or (ob_lowest if ob_lowest and ob_lowest != 99999 else None)
+                best_total = best.get("total") or (
+                    ob_lowest if ob_lowest and ob_lowest != 99999 else None
+                )
                 best_return_airline = ""
             else:
-                rt_lowest = min((s.get("lowest_price") or 99999 for s in results["return"]), default=None)
+                rt_lowest = min(
+                    (s.get("lowest_price") or 99999 for s in results["return"]),
+                    default=None,
+                )
                 best_total = best.get("total")
                 best_return_airline = (best.get("return") or {}).get("airline", "")[:50]
 
@@ -149,18 +211,23 @@ def save_to_db(results, combos, trip):
                 (trip_id, check_time, best_total, outbound_lowest, return_lowest,
                  best_outbound_airline, best_return_airline, flights_found)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
-                (trip_id, now,
-                 best_total,
-                 ob_lowest if ob_lowest and ob_lowest != 99999 else None,
-                 rt_lowest if rt_lowest and rt_lowest != 99999 else None,
-                 (best.get("outbound") or {}).get("airline", "")[:50],
-                 best_return_airline,
-                 flights_count)
+                (
+                    trip_id,
+                    now,
+                    best_total,
+                    ob_lowest if ob_lowest and ob_lowest != 99999 else None,
+                    rt_lowest if rt_lowest and rt_lowest != 99999 else None,
+                    (best.get("outbound") or {}).get("airline", "")[:50],
+                    best_return_airline,
+                    flights_count,
+                ),
             )
 
             conn.commit()
             if skipped_count:
-                log.warning(f"💾 已入库: {flights_count} 条航班 + 1 条汇总 (跳过 {skipped_count} 条异常行)")
+                log.warning(
+                    f"💾 已入库: {flights_count} 条航班 + 1 条汇总 (跳过 {skipped_count} 条异常行)"
+                )
             else:
                 log.info(f"💾 已入库: {flights_count} 条航班 + 1 条汇总")
 
@@ -174,7 +241,10 @@ def already_checked_this_hour():
         with get_db() as db:
             cur = db.cursor()
             hour_start = now_jst().replace(minute=0, second=0, microsecond=0)
-            cur.execute("SELECT COUNT(*) FROM check_summary WHERE check_time >= %s", (hour_start,))
+            cur.execute(
+                "SELECT COUNT(*) FROM check_summary WHERE check_time >= %s",
+                (hour_start,),
+            )
             count = cur.fetchone()[0]
         return count > 0
     except Exception:
@@ -182,6 +252,7 @@ def already_checked_this_hour():
 
 
 # ─── Pending Trip（Bot 确认流程用）────────────────────────────────────────────
+
 
 def create_pending_trip(fields: dict) -> int:
     """
@@ -206,16 +277,20 @@ def create_pending_trip(fields: dict) -> int:
                 fields.get("return_date"),
                 fields.get("budget", 1500),
                 fields.get("trip_type", "round_trip"),
-                fields.get("ob_depart_start"), fields.get("ob_depart_end"),
-                fields.get("ob_arrive_start"), fields.get("ob_arrive_end"),
-                fields.get("rt_depart_start"), fields.get("rt_depart_end"),
-                fields.get("rt_arrive_start"), fields.get("rt_arrive_end"),
+                fields.get("ob_depart_start"),
+                fields.get("ob_depart_end"),
+                fields.get("ob_arrive_start"),
+                fields.get("ob_arrive_end"),
+                fields.get("rt_depart_start"),
+                fields.get("rt_depart_end"),
+                fields.get("rt_arrive_start"),
+                fields.get("rt_arrive_end"),
                 fields.get("outbound_flex", 0),
                 fields.get("return_flex"),
                 fields.get("max_stops"),
                 1 if fields.get("throwaway") else 0,
                 expires_at,
-            )
+            ),
         )
         db.commit()
         return cur.lastrowid
@@ -227,7 +302,7 @@ def activate_pending_trip(pending_id: int) -> bool:
         cur = db.cursor()
         cur.execute(
             "UPDATE trips SET status='active', expires_at=NULL WHERE id=%s AND status='pending'",
-            (pending_id,)
+            (pending_id,),
         )
         affected = cur.rowcount
         db.commit()
@@ -253,6 +328,7 @@ def cleanup_expired_pending_trips():
 # ─── Bot CRUD helpers ─────────────────────────────────────────────────────────
 # bot.py 不应内联 SQL；所有写操作都通过这里
 
+
 def set_trip_status(trip_id: int, status: str) -> bool:
     """设置行程状态（active / paused / deleted）。返回是否找到了该行程。"""
     try:
@@ -271,7 +347,9 @@ def cancel_pending_trip(pending_id: int) -> None:
     try:
         with get_db() as db:
             cur = db.cursor()
-            cur.execute("DELETE FROM trips WHERE id=%s AND status='pending'", (pending_id,))
+            cur.execute(
+                "DELETE FROM trips WHERE id=%s AND status='pending'", (pending_id,)
+            )
             db.commit()
     except Exception as e:
         log.error(f"取消 pending 行程 #{pending_id} 失败: {e}")
@@ -291,10 +369,13 @@ def get_trip_basic_info(trip_id) -> dict | None:
         if not r:
             return None
         return {
-            "id": r[0], "origin": r[1], "destination": r[2],
+            "id": r[0],
+            "origin": r[1],
+            "destination": r[2],
             "outbound_date": str(r[3]),
             "return_date": str(r[4]) if r[4] else None,
-            "budget": r[5], "trip_type": r[6] or "round_trip",
+            "budget": r[5],
+            "trip_type": r[6] or "round_trip",
         }
     except Exception as e:
         log.error(f"读取行程 #{trip_id} 基本信息失败: {e}")
@@ -317,11 +398,17 @@ def get_trip_for_edit(trip_id) -> dict | None:
         if not r:
             return None
         return {
-            "outbound_date": r[0], "return_date": r[1], "budget": r[2],
-            "ob_depart_start": r[3], "ob_depart_end": r[4],
-            "ob_arrive_start": r[5], "ob_arrive_end": r[6],
-            "rt_depart_start": r[7], "rt_depart_end": r[8],
-            "rt_arrive_start": r[9], "rt_arrive_end": r[10],
+            "outbound_date": r[0],
+            "return_date": r[1],
+            "budget": r[2],
+            "ob_depart_start": r[3],
+            "ob_depart_end": r[4],
+            "ob_arrive_start": r[5],
+            "ob_arrive_end": r[6],
+            "rt_depart_start": r[7],
+            "rt_depart_end": r[8],
+            "rt_arrive_start": r[9],
+            "rt_arrive_end": r[10],
             "ob_flex": r[11] if r[11] is not None else 0,
             "rt_flex": r[12] if r[12] is not None else 1,
         }

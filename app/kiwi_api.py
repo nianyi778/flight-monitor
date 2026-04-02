@@ -34,19 +34,21 @@ def _parse_offers(offers, origin: str, destination: str) -> list[dict]:
             dep = seg.departure.strftime("%H:%M") if seg.departure else ""
             arr = seg.arrival.strftime("%H:%M") if seg.arrival else ""
 
-            flights.append({
-                "airline": airline or "Kiwi",
-                "flight_no": flight_no,
-                "departure_time": dep,
-                "arrival_time": arr,
-                "price_cny": round(price_cny),
-                "original_price": price_cny,
-                "original_currency": offer.currency or "CNY",
-                "origin": seg.origin or origin,
-                "destination": seg.destination or destination,
-                "via": "",
-                "stops": outbound.stopovers or 0,
-            })
+            flights.append(
+                {
+                    "airline": airline or "Kiwi",
+                    "flight_no": flight_no,
+                    "departure_time": dep,
+                    "arrival_time": arr,
+                    "price_cny": round(price_cny),
+                    "original_price": price_cny,
+                    "original_currency": offer.currency or "CNY",
+                    "origin": seg.origin or origin,
+                    "destination": seg.destination or destination,
+                    "via": "",
+                    "stops": outbound.stopovers or 0,
+                }
+            )
         except Exception:
             continue
 
@@ -60,7 +62,9 @@ def _parse_offers(offers, origin: str, destination: str) -> list[dict]:
     return sorted(dedup.values(), key=lambda x: x["price_cny"])
 
 
-def _run_kiwi(origin: str, destination: str, date_str: str) -> list[dict]:
+def _run_kiwi(
+    origin: str, destination: str, date_str: str, max_stops=None
+) -> list[dict]:
     try:
         from letsfg.connectors.kiwi import KiwiConnectorClient
         from letsfg.models.flights import FlightSearchRequest
@@ -68,6 +72,7 @@ def _run_kiwi(origin: str, destination: str, date_str: str) -> list[dict]:
         raise FileNotFoundError("letsfg 未安装: pip install 'letsfg[cli]'")
 
     flight_date = dt_date.fromisoformat(date_str)
+    stopovers = max_stops if max_stops is not None else 2
 
     async def _search():
         client = KiwiConnectorClient(timeout=_KIWI_TIMEOUT)
@@ -79,7 +84,7 @@ def _run_kiwi(origin: str, destination: str, date_str: str) -> list[dict]:
                 adults=1,
                 currency="CNY",
                 limit=50,
-                max_stopovers=0,  # 仅直飞
+                max_stopovers=stopovers,
             )
             resp = await asyncio.wait_for(
                 client.search_flights(req),
@@ -122,11 +127,14 @@ def get_kiwi_flights_for_searches(searches, proxy_url=None, proxy_id=None):
             continue
 
         # 用真实的 Kiwi 搜索页作为购买链接（原始 kiwi:// 是伪协议，用户无法访问）
-        kiwi_search_url = f"https://www.kiwi.com/en/search/results/{origin}/{destination}/{date_str}"
+        kiwi_search_url = (
+            f"https://www.kiwi.com/en/search/results/{origin}/{destination}/{date_str}"
+        )
         result["url"] = kiwi_search_url
 
+        max_stops = s.get("max_stops")
         try:
-            offers = _run_kiwi(origin, destination, date_str)
+            offers = _run_kiwi(origin, destination, date_str, max_stops=max_stops)
             flights = _parse_offers(offers, origin, destination)
             if flights:
                 result["flights"] = flights

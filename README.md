@@ -7,15 +7,21 @@
 ```
 app/
 ├── config.py             # 配置 & 常量 & 时区(JST)
-├── db.py                 # TiDB 数据层
+├── db.py                 # TiDB 数据层（连接池 + SSL）
 ├── kiwi_api.py           # Kiwi GraphQL 聚合搜索
-├── google_flights_api.py # Google Flights（CDP 连接 Chrome sidecar）
+├── google_flights_api.py # Google Flights（fast-flights protobuf）
 ├── spring_api.py         # 春秋航空官网 API 直连（9C + IJ）
 ├── matcher.py            # 弹性日期搜索 + 航班组合匹配
+├── search_engine.py      # 搜索引擎（去重、缓存、API 调用编排）
+├── alerter.py            # 告警推送 & 确认等待
+├── flight_source.py      # API 数据源 Protocol 接口定义
 ├── notifier.py           # Telegram 通知 & 消息格式化
-├── bot.py                # TG Bot 交互（Inline Keyboard）
-├── mcp_server.py         # MCP Server（供其他 AI Agent 调用）
-└── scheduler.py          # 智能调度（去重 + 分频）
+├── bot.py                # TG Bot 交互（Inline Keyboard + 频率限制）
+├── mcp_server.py         # MCP Server（Bearer Token 认证）
+├── anti_bot.py           # 反作弊识别 & HTTP 状态分类
+├── airports.py           # 机场数据 & 路由对生成
+├── source_runtime.py     # 数据源健康管理 & 代理评分
+└── scheduler.py          # 智能调度（编排核心）
 ```
 
 ## 功能
@@ -59,7 +65,7 @@ app/
 
 - **去重**：多行程共享相同日期的抓取结果
 - **分频检查**：<30天每小时 / 30-90天每3小时 / >90天每6小时
-- **弹性日期**：自动搜索目标日期 ±N 天，找最便宜的组合
+- **弹性日期**：自动搜索目标日期 ±N 天（双向），找最便宜的组合
 - **源健康管理**：连续失败自动冷却，恢复后自动重启
 - **时间窗过滤**：去程/回程各设时间窗，无时间信息的航班直接收录不丢弃
 - **覆盖降级告警**：Google/Chrome 不可用时推送 Telegram 告警（每小时最多一次）
@@ -89,6 +95,8 @@ app/
 
 **HTTP**: `GET http://<host>:8081/health` — 轻量健康检查（适合外部监控轮询）
 
+**认证**: 设置 `MCP_AUTH_TOKEN` 环境变量启用 Bearer Token 认证（未设置则无认证，向后兼容）
+
 SSE 连接地址：`http://<host>:8081/sse`
 
 ## 部署
@@ -101,7 +109,7 @@ docker compose pull && docker compose up -d --force-recreate flight-monitor
 
 # 本地构建（多架构推送）
 docker buildx build --platform linux/amd64,linux/arm64 \
-  --output type=image,name=ghcr.io/nianyi778/flight-monitor:v6.21,push=true \
+  --output type=image,name=ghcr.io/nianyi778/flight-monitor:v7.0,push=true \
   --network host .
 ```
 
@@ -109,6 +117,7 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 
 | 版本 | 主要更新 |
 |------|---------|
+| v7.0 | 全面审计重构：修复中转航班丢失(Kiwi/Google)、弹性日期双向搜索、去重key含路由、连接池(PooledDB)+SSL、非root容器、MCP认证、Bot频率限制、scheduler拆分(search_engine+alerter)、CI加pytest+ruff+多架构、45个单元测试 |
 | v6.22 | 修复 get_cheapest_flights 返回历史无关日期数据的 bug（JOIN trips 表按 flight_date ± flex 过滤） |
 | v6.21 | Chrome healthcheck（CDP 端口 9222 探活）；Google 覆盖降级 Telegram 告警 |
 | v6.20 | spring_api 自动识别 NGO 出发切换 IsIJFlight=true，接入春秋日本(IJ)；扩展 _AIRPORT_NAMES |

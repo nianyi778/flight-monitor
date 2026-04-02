@@ -9,16 +9,46 @@ from datetime import datetime
 
 import requests
 
+import time
+from collections import defaultdict
+
 from app.config import (
-    TG_BOT_TOKEN, TG_CHAT_ID, TG_ALLOWED_CHATS, ACK_KEYWORD, CHECK_INTERVAL,
-    now_jst, log, load_state, save_state,
+    TG_BOT_TOKEN,
+    TG_CHAT_ID,
+    TG_ALLOWED_CHATS,
+    ACK_KEYWORD,
+    CHECK_INTERVAL,
+    BOT_RATE_LIMIT_PER_MINUTE,
+    now_jst,
+    log,
+    load_state,
+    save_state,
 )
+
+_rate_limit_buckets: dict[str, list[float]] = defaultdict(list)
+
+
+def _is_rate_limited(chat_id: str) -> bool:
+    now = time.monotonic()
+    bucket = _rate_limit_buckets[chat_id]
+    _rate_limit_buckets[chat_id] = [t for t in bucket if now - t < 60]
+    if len(_rate_limit_buckets[chat_id]) >= BOT_RATE_LIMIT_PER_MINUTE:
+        return True
+    _rate_limit_buckets[chat_id].append(now)
+    return False
+
+
 from app.db import (
-    get_db, get_active_trips,
-    set_trip_status, cancel_pending_trip,
-    get_trip_basic_info, get_trip_for_edit,
-    update_trip_budget, update_trip_dates,
-    update_trip_flex, update_trip_time_windows,
+    get_db,
+    get_active_trips,
+    set_trip_status,
+    cancel_pending_trip,
+    get_trip_basic_info,
+    get_trip_for_edit,
+    update_trip_budget,
+    update_trip_dates,
+    update_trip_flex,
+    update_trip_time_windows,
 )
 from app.notifier import tg_send
 
@@ -35,12 +65,14 @@ checking_in_progress = False
 # TG API 工具
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+
 def tg_api(method, **kwargs):
     """调用 Telegram Bot API"""
     try:
         resp = requests.post(
             f"https://api.telegram.org/bot{TG_BOT_TOKEN}/{method}",
-            json=kwargs, timeout=10,
+            json=kwargs,
+            timeout=10,
         )
         return resp.json()
     except Exception as e:
@@ -50,8 +82,11 @@ def tg_api(method, **kwargs):
 
 def tg_send_with_buttons(text, buttons, parse_mode="Markdown"):
     """发送带 Inline Keyboard 的消息"""
-    tg_api("sendMessage",
-        chat_id=TG_CHAT_ID, text=text, parse_mode=parse_mode,
+    tg_api(
+        "sendMessage",
+        chat_id=TG_CHAT_ID,
+        text=text,
+        parse_mode=parse_mode,
         disable_web_page_preview=True,
         reply_markup={"inline_keyboard": buttons},
     )
@@ -65,8 +100,11 @@ def tg_answer_callback(callback_id, text=""):
 def tg_edit_message(message_id, text, buttons=None, parse_mode="Markdown"):
     """编辑已有消息（更新按钮状态）"""
     kwargs = dict(
-        chat_id=TG_CHAT_ID, message_id=message_id,
-        text=text, parse_mode=parse_mode, disable_web_page_preview=True,
+        chat_id=TG_CHAT_ID,
+        message_id=message_id,
+        text=text,
+        parse_mode=parse_mode,
+        disable_web_page_preview=True,
     )
     if buttons is not None:
         kwargs["reply_markup"] = {"inline_keyboard": buttons}
@@ -77,18 +115,22 @@ def tg_edit_message(message_id, text, buttons=None, parse_mode="Markdown"):
 # 菜单注册
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+
 def setup_tg_commands():
     if not TG_BOT_TOKEN:
         return
     try:
-        tg_api("setMyCommands", commands=[
-            {"command": "check", "description": "🔍 立即查价"},
-            {"command": "trips", "description": "✈️ 行程管理"},
-            {"command": "status", "description": "📊 系统状态"},
-            {"command": "history", "description": "📈 价格趋势"},
-            {"command": "health", "description": "🩺 健康检查"},
-            {"command": "help", "description": "💡 使用帮助"},
-        ])
+        tg_api(
+            "setMyCommands",
+            commands=[
+                {"command": "check", "description": "🔍 立即查价"},
+                {"command": "trips", "description": "✈️ 行程管理"},
+                {"command": "status", "description": "📊 系统状态"},
+                {"command": "history", "description": "📈 价格趋势"},
+                {"command": "health", "description": "🩺 健康检查"},
+                {"command": "help", "description": "💡 使用帮助"},
+            ],
+        )
         log.info("TG 菜单命令已注册")
     except Exception as e:
         log.error(f"TG 菜单注册失败: {e}")
@@ -97,6 +139,7 @@ def setup_tg_commands():
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 辅助函数
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 
 def _days_until(date_str):
     try:
@@ -135,16 +178,25 @@ def _get_all_trips():
             rows = cur.fetchall()
         return [
             {
-                "id": r[0], "outbound_date": str(r[1]),
+                "id": r[0],
+                "outbound_date": str(r[1]),
                 "return_date": str(r[2]) if r[2] else None,
-                "budget": r[3], "best_price": r[4],
-                "ob_depart_start": r[5], "ob_depart_end": r[6],
-                "ob_arrive_start": r[7], "ob_arrive_end": r[8],
-                "rt_depart_start": r[9], "rt_depart_end": r[10],
-                "rt_arrive_start": r[11], "rt_arrive_end": r[12],
-                "status": r[13], "trip_type": r[14] or "round_trip",
-                "origin": r[15] or "TYO", "destination": r[16] or "PVG",
-                "max_stops": r[17], "throwaway": bool(r[18]),
+                "budget": r[3],
+                "best_price": r[4],
+                "ob_depart_start": r[5],
+                "ob_depart_end": r[6],
+                "ob_arrive_start": r[7],
+                "ob_arrive_end": r[8],
+                "rt_depart_start": r[9],
+                "rt_depart_end": r[10],
+                "rt_arrive_start": r[11],
+                "rt_arrive_end": r[12],
+                "status": r[13],
+                "trip_type": r[14] or "round_trip",
+                "origin": r[15] or "TYO",
+                "destination": r[16] or "PVG",
+                "max_stops": r[17],
+                "throwaway": bool(r[18]),
             }
             for r in rows
         ]
@@ -157,12 +209,13 @@ def _get_all_trips():
 # 命令处理
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+
 def _handle_trips():
     trips = _get_all_trips()
     if not trips:
         tg_send_with_buttons(
             "✈️ *行程管理*\n\n暂无行程，点击下方添加：",
-            [[{"text": "➕ 添加行程", "callback_data": "trip_add_guide"}]]
+            [[{"text": "➕ 添加行程", "callback_data": "trip_add_guide"}]],
         )
         return
 
@@ -179,7 +232,11 @@ def _handle_trips():
         is_one_way = t.get("trip_type") == "one_way"
         type_tag = " [单程]" if is_one_way else ""
         route = f"{t.get('origin', 'TYO')}→{t.get('destination', 'PVG')}"
-        date_display = t["outbound_date"] if is_one_way else f"{t['outbound_date']} → {t.get('return_date', '?')}"
+        date_display = (
+            t["outbound_date"]
+            if is_one_way
+            else f"{t['outbound_date']} → {t.get('return_date', '?')}"
+        )
 
         # Time window summary
         ods, ode = t.get("ob_depart_start"), t.get("ob_depart_end")
@@ -206,7 +263,11 @@ def _handle_trips():
     if paused:
         for t in paused:
             is_one_way = t.get("trip_type") == "one_way"
-            date_display = t["outbound_date"] if is_one_way else f"{t['outbound_date']}→{t.get('return_date', '?')}"
+            date_display = (
+                t["outbound_date"]
+                if is_one_way
+                else f"{t['outbound_date']}→{t.get('return_date', '?')}"
+            )
             type_tag = "[单程]" if is_one_way else ""
             lines.append(f"⏸ #{t['id']} {date_display} {type_tag}")
 
@@ -214,17 +275,21 @@ def _handle_trips():
     buttons = []
     for t in active:
         tid = t["id"]
-        buttons.append([
-            {"text": f"✏️ 编辑#{tid}", "callback_data": f"trip_edit_{tid}"},
-            {"text": f"⏸ 暂停#{tid}", "callback_data": f"trip_pause_{tid}"},
-            {"text": f"🗑 删除#{tid}", "callback_data": f"trip_del_confirm_{tid}"},
-        ])
+        buttons.append(
+            [
+                {"text": f"✏️ 编辑#{tid}", "callback_data": f"trip_edit_{tid}"},
+                {"text": f"⏸ 暂停#{tid}", "callback_data": f"trip_pause_{tid}"},
+                {"text": f"🗑 删除#{tid}", "callback_data": f"trip_del_confirm_{tid}"},
+            ]
+        )
     for t in paused:
         tid = t["id"]
-        buttons.append([
-            {"text": f"▶️ 恢复#{tid}", "callback_data": f"trip_resume_{tid}"},
-            {"text": f"🗑 删除#{tid}", "callback_data": f"trip_del_confirm_{tid}"},
-        ])
+        buttons.append(
+            [
+                {"text": f"▶️ 恢复#{tid}", "callback_data": f"trip_resume_{tid}"},
+                {"text": f"🗑 删除#{tid}", "callback_data": f"trip_del_confirm_{tid}"},
+            ]
+        )
 
     buttons.append([{"text": "➕ 添加新行程", "callback_data": "trip_add_guide"}])
 
@@ -263,7 +328,9 @@ def _validate_trip_input(text):
     fifth_arg = parts[5] if len(parts) > 5 else None
 
     # Detect one-way vs round-trip
-    is_one_way = fifth_arg in ("单程", "单", "one_way", "oneway") if fifth_arg else False
+    is_one_way = (
+        fifth_arg in ("单程", "单", "one_way", "oneway") if fifth_arg else False
+    )
 
     try:
         ob_date = datetime.strptime(ob_d, "%Y-%m-%d").date()
@@ -289,7 +356,10 @@ def _validate_trip_input(text):
                 errors.append(f"❌ 回程日期 `{rt_d}` 必须晚于去程 `{ob_d}`")
             extra_start = 6
         except ValueError:
-            return None, f"❌ 回程日期格式错误: `{fifth_arg}` (应为 YYYY-MM-DD 或 '单程')"
+            return (
+                None,
+                f"❌ 回程日期格式错误: `{fifth_arg}` (应为 YYYY-MM-DD 或 '单程')",
+            )
 
     bgt = 1500
     ob_dep_s = ob_dep_e = ob_arr_s = ob_arr_e = None
@@ -325,9 +395,13 @@ def _validate_trip_input(text):
             try:
                 s, e = [int(x) for x in time_val.split("-")]
                 if not (0 <= s <= 23 and 0 <= e <= 23):
-                    errors.append(f"❌ {token} 时间范围无效: `{time_val}` (小时须在 0-23)")
+                    errors.append(
+                        f"❌ {token} 时间范围无效: `{time_val}` (小时须在 0-23)"
+                    )
                 elif s > e and (s - e) >= 23:
-                    errors.append(f"❌ {token} 跨天窗口覆盖全天，等于不过滤，请缩小范围")
+                    errors.append(
+                        f"❌ {token} 跨天窗口覆盖全天，等于不过滤，请缩小范围"
+                    )
                 else:
                     if token == "ob-dep":
                         ob_dep_s, ob_dep_e = s, e
@@ -338,7 +412,9 @@ def _validate_trip_input(text):
                     elif token == "rt-arr":
                         rt_arr_s, rt_arr_e = s, e
             except Exception:
-                errors.append(f"❌ {token} 时间格式错误: `{time_val}` (应为 H-H，如 19-23 或跨天 22-2)")
+                errors.append(
+                    f"❌ {token} 时间格式错误: `{time_val}` (应为 H-H，如 19-23 或跨天 22-2)"
+                )
             idx += 2
             continue
         # Legacy aliases
@@ -389,14 +465,22 @@ def _validate_trip_input(text):
         return None, "\n".join(errors)
 
     return {
-        "origin": origin, "destination": destination,
-        "ob_d": ob_d, "rt_d": rt_d, "budget": bgt,
+        "origin": origin,
+        "destination": destination,
+        "ob_d": ob_d,
+        "rt_d": rt_d,
+        "budget": bgt,
         "trip_type": "one_way" if is_one_way else "round_trip",
-        "ob_depart_start": ob_dep_s, "ob_depart_end": ob_dep_e,
-        "ob_arrive_start": ob_arr_s, "ob_arrive_end": ob_arr_e,
-        "rt_depart_start": rt_dep_s, "rt_depart_end": rt_dep_e,
-        "rt_arrive_start": rt_arr_s, "rt_arrive_end": rt_arr_e,
-        "max_stops": max_stops, "throwaway": throwaway,
+        "ob_depart_start": ob_dep_s,
+        "ob_depart_end": ob_dep_e,
+        "ob_arrive_start": ob_arr_s,
+        "ob_arrive_end": ob_arr_e,
+        "rt_depart_start": rt_dep_s,
+        "rt_depart_end": rt_dep_e,
+        "rt_arrive_start": rt_arr_s,
+        "rt_arrive_end": rt_arr_e,
+        "max_stops": max_stops,
+        "throwaway": throwaway,
     }, None
 
 
@@ -425,7 +509,6 @@ def _validate_date_pair(ob_d, rt_d):
     return (ob_d, rt_d), None
 
 
-
 def _parse_flex_arg(raw, prefix, label):
     if not raw.startswith(prefix):
         return None, f"❌ {label}格式错误，应为 `{prefix}N`"
@@ -446,7 +529,7 @@ def _handle_trip_add(text):
     if error:
         tg_send_with_buttons(
             f"{error}\n\n💡 示例:\n`/trip add TYO PVG 2026-09-18 2026-09-28 1500 ob-dep 19-23 rt-arr 0-6`",
-            [[{"text": "📖 查看帮助", "callback_data": "trip_add_guide"}]]
+            [[{"text": "📖 查看帮助", "callback_data": "trip_add_guide"}]],
         )
         return
 
@@ -456,26 +539,28 @@ def _handle_trip_add(text):
     type_label = "单程" if is_one_way else "往返"
 
     # 写入 pending 状态（1小时后自动清理）
-    pending_id = create_pending_trip({
-        "origin": data["origin"],
-        "destination": data["destination"],
-        "outbound_date": data["ob_d"],
-        "return_date": rt_d or None,
-        "budget": data["budget"],
-        "trip_type": data["trip_type"],
-        "ob_depart_start": data.get("ob_depart_start"),
-        "ob_depart_end": data.get("ob_depart_end"),
-        "ob_arrive_start": data.get("ob_arrive_start"),
-        "ob_arrive_end": data.get("ob_arrive_end"),
-        "rt_depart_start": data.get("rt_depart_start") if not is_one_way else None,
-        "rt_depart_end": data.get("rt_depart_end") if not is_one_way else None,
-        "rt_arrive_start": data.get("rt_arrive_start") if not is_one_way else None,
-        "rt_arrive_end": data.get("rt_arrive_end") if not is_one_way else None,
-        "outbound_flex": 0,
-        "return_flex": 1 if not is_one_way else None,
-        "max_stops": data.get("max_stops"),
-        "throwaway": data.get("throwaway", False),
-    })
+    pending_id = create_pending_trip(
+        {
+            "origin": data["origin"],
+            "destination": data["destination"],
+            "outbound_date": data["ob_d"],
+            "return_date": rt_d or None,
+            "budget": data["budget"],
+            "trip_type": data["trip_type"],
+            "ob_depart_start": data.get("ob_depart_start"),
+            "ob_depart_end": data.get("ob_depart_end"),
+            "ob_arrive_start": data.get("ob_arrive_start"),
+            "ob_arrive_end": data.get("ob_arrive_end"),
+            "rt_depart_start": data.get("rt_depart_start") if not is_one_way else None,
+            "rt_depart_end": data.get("rt_depart_end") if not is_one_way else None,
+            "rt_arrive_start": data.get("rt_arrive_start") if not is_one_way else None,
+            "rt_arrive_end": data.get("rt_arrive_end") if not is_one_way else None,
+            "outbound_flex": 0,
+            "return_flex": 1 if not is_one_way else None,
+            "max_stops": data.get("max_stops"),
+            "throwaway": data.get("throwaway", False),
+        }
+    )
 
     preview_lines = [
         f"✈️ *请确认行程信息* [{type_label}]\n",
@@ -483,16 +568,24 @@ def _handle_trip_add(text):
         f"📅 去程: {data['ob_d']}  ({countdown})",
     ]
     if not is_one_way and rt_d:
-        days = (datetime.strptime(rt_d, "%Y-%m-%d").date() -
-                datetime.strptime(data["ob_d"], "%Y-%m-%d").date()).days
+        days = (
+            datetime.strptime(rt_d, "%Y-%m-%d").date()
+            - datetime.strptime(data["ob_d"], "%Y-%m-%d").date()
+        ).days
         preview_lines.append(f"📅 回程: {rt_d}  (共{days}天)")
     preview_lines.append(f"💰 预算: ¥{data['budget']:,}(CNY) {type_label}")
     if data.get("ob_depart_start") is not None:
-        preview_lines.append(f"🛫 去程出发: {data['ob_depart_start']}:00-{data['ob_depart_end']}:00")
+        preview_lines.append(
+            f"🛫 去程出发: {data['ob_depart_start']}:00-{data['ob_depart_end']}:00"
+        )
     if data.get("ob_arrive_start") is not None:
-        preview_lines.append(f"🛬 去程落地: {data['ob_arrive_start']}:00-{data['ob_arrive_end']}:00")
+        preview_lines.append(
+            f"🛬 去程落地: {data['ob_arrive_start']}:00-{data['ob_arrive_end']}:00"
+        )
     if not is_one_way and data.get("rt_arrive_start") is not None:
-        preview_lines.append(f"🛬 回程落地: {data['rt_arrive_start']}:00-{data['rt_arrive_end']}:00")
+        preview_lines.append(
+            f"🛬 回程落地: {data['rt_arrive_start']}:00-{data['rt_arrive_end']}:00"
+        )
     if data.get("max_stops") is not None:
         stops_str = "直飞" if data["max_stops"] == 0 else f"≤{data['max_stops']}转"
         preview_lines.append(f"✈️ 经停: {stops_str}")
@@ -503,9 +596,14 @@ def _handle_trip_add(text):
     tg_send_with_buttons(
         "\n".join(preview_lines),
         [
-            [{"text": "✅ 确认添加", "callback_data": f"trip_confirm_{pending_id}"},
-             {"text": "❌ 取消", "callback_data": f"trip_cancel_pending_{pending_id}"}],
-        ]
+            [
+                {"text": "✅ 确认添加", "callback_data": f"trip_confirm_{pending_id}"},
+                {
+                    "text": "❌ 取消",
+                    "callback_data": f"trip_cancel_pending_{pending_id}",
+                },
+            ],
+        ],
     )
 
 
@@ -528,8 +626,11 @@ def _health_check():
     # 3. 代理
     if PROXY_URL:
         try:
-            r = req.get("https://httpbin.org/ip",
-                proxies={"https": PROXY_URL, "http": PROXY_URL}, timeout=10)
+            r = req.get(
+                "https://httpbin.org/ip",
+                proxies={"https": PROXY_URL, "http": PROXY_URL},
+                timeout=10,
+            )
             ip = r.json().get("origin", "?")
             checks["proxy"] = f"✅ {ip}"
         except Exception as e:
@@ -572,14 +673,25 @@ def _handle_status():
         for t in trips:
             best = t.get("best_price")
             best_str = f"¥{best:,}" if best else "暂无"
-            date_display = t["outbound_date"] if not t.get("return_date") else f"{t['outbound_date']}→{t['return_date']}"
-            lines.append(f"#{t['id']} {date_display} 预算¥{t['budget']:,} 最低{best_str}")
+            date_display = (
+                t["outbound_date"]
+                if not t.get("return_date")
+                else f"{t['outbound_date']}→{t['return_date']}"
+            )
+            lines.append(
+                f"#{t['id']} {date_display} 预算¥{t['budget']:,} 最低{best_str}"
+            )
 
-    tg_send_with_buttons("\n".join(lines), [
-        [{"text": "🩺 健康检查", "callback_data": "health_check"},
-         {"text": "🔍 立即查价", "callback_data": "do_check"}],
-        [{"text": "✈️ 行程管理", "callback_data": "show_trips"}],
-    ])
+    tg_send_with_buttons(
+        "\n".join(lines),
+        [
+            [
+                {"text": "🩺 健康检查", "callback_data": "health_check"},
+                {"text": "🔍 立即查价", "callback_data": "do_check"},
+            ],
+            [{"text": "✈️ 行程管理", "callback_data": "show_trips"}],
+        ],
+    )
 
 
 def _handle_history():
@@ -623,17 +735,22 @@ def _handle_help():
         f"🇨🇳=人民币  🇯🇵=日元\n"
         f"回复「{ACK_KEYWORD}」停止好价推送",
         [
-            [{"text": "🔍 立即查价", "callback_data": "do_check"},
-             {"text": "✈️ 行程管理", "callback_data": "show_trips"}],
-            [{"text": "📊 系统状态", "callback_data": "show_status"},
-             {"text": "📈 价格趋势", "callback_data": "show_history"}],
-        ]
+            [
+                {"text": "🔍 立即查价", "callback_data": "do_check"},
+                {"text": "✈️ 行程管理", "callback_data": "show_trips"},
+            ],
+            [
+                {"text": "📊 系统状态", "callback_data": "show_status"},
+                {"text": "📈 价格趋势", "callback_data": "show_history"},
+            ],
+        ],
     )
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Callback Query 处理（按钮点击）
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 
 def _handle_callback(callback_id, data, message_id, _loop=None):
     """处理 Inline Keyboard 按钮回调。
@@ -703,6 +820,7 @@ def _handle_callback(callback_id, data, message_id, _loop=None):
     elif data.startswith("trip_confirm_"):
         try:
             from app.db import activate_pending_trip
+
             pending_id = int(data.split("_")[-1])
             ok = activate_pending_trip(pending_id)
             if not ok:
@@ -717,16 +835,25 @@ def _handle_callback(callback_id, data, message_id, _loop=None):
             is_one_way = t["trip_type"] == "one_way"
             type_label = "单程" if is_one_way else "往返"
             countdown = _days_until(t["outbound_date"])
-            date_line = t["outbound_date"] if is_one_way else f"{t['outbound_date']} → {t['return_date']}"
+            date_line = (
+                t["outbound_date"]
+                if is_one_way
+                else f"{t['outbound_date']} → {t['return_date']}"
+            )
             tg_answer_callback(callback_id, f"✅ 行程#{t['id']}已添加")
-            tg_edit_message(message_id,
+            tg_edit_message(
+                message_id,
                 f"✅ *行程#{t['id']} 已添加!* [{type_label}]\n\n"
                 f"🗺️ 路线: {t['origin']}→{t['destination']}\n"
                 f"📅 {date_line}  ({countdown})\n"
                 f"💰 ¥{t['budget']:,}(CNY)\n\n"
                 f"系统将在下次巡查时开始监控此行程",
-                [[{"text": "🔍 立即查价", "callback_data": "do_check"},
-                  {"text": "✈️ 查看行程", "callback_data": "show_trips"}]]
+                [
+                    [
+                        {"text": "🔍 立即查价", "callback_data": "do_check"},
+                        {"text": "✈️ 查看行程", "callback_data": "show_trips"},
+                    ]
+                ],
             )
         except Exception as e:
             tg_answer_callback(callback_id, "添加失败")
@@ -755,8 +882,12 @@ def _handle_callback(callback_id, data, message_id, _loop=None):
         tg_answer_callback(callback_id)
         tg_send_with_buttons(
             f"⚠️ 确认删除行程 *#{tid}*？",
-            [[{"text": "✅ 确认删除", "callback_data": f"trip_del_yes_{tid}"},
-              {"text": "❌ 取消", "callback_data": "show_trips"}]]
+            [
+                [
+                    {"text": "✅ 确认删除", "callback_data": f"trip_del_yes_{tid}"},
+                    {"text": "❌ 取消", "callback_data": "show_trips"},
+                ]
+            ],
         )
 
     elif data.startswith("trip_del_yes_"):
@@ -774,7 +905,10 @@ def _handle_callback(callback_id, data, message_id, _loop=None):
         try:
             r = get_trip_for_edit(tid)
             if r:
-                def _fmt_win(s, e): return f"`{s}-{e}点`" if s is not None else "`不限`"
+
+                def _fmt_win(s, e):
+                    return f"`{s}-{e}点`" if s is not None else "`不限`"
+
                 tg_send_with_buttons(
                     f"✏️ *编辑行程 #{tid}*\n\n"
                     f"📅 去程: `{r['outbound_date']}` (弹性±{r['ob_flex']}天)\n"
@@ -786,12 +920,28 @@ def _handle_callback(callback_id, data, message_id, _loop=None):
                     f"到达: {_fmt_win(r['rt_arrive_start'], r['rt_arrive_end'])}\n\n"
                     f"点击要修改的项目：",
                     [
-                        [{"text": "📅 改日期", "callback_data": f"trip_date_guide_{tid}"},
-                         {"text": "💰 改预算", "callback_data": f"trip_budget_guide_{tid}"}],
-                        [{"text": "⏰ 改时间窗口", "callback_data": f"trip_time_guide_{tid}"},
-                         {"text": "📆 改弹性天数", "callback_data": f"trip_flex_guide_{tid}"}],
+                        [
+                            {
+                                "text": "📅 改日期",
+                                "callback_data": f"trip_date_guide_{tid}",
+                            },
+                            {
+                                "text": "💰 改预算",
+                                "callback_data": f"trip_budget_guide_{tid}",
+                            },
+                        ],
+                        [
+                            {
+                                "text": "⏰ 改时间窗口",
+                                "callback_data": f"trip_time_guide_{tid}",
+                            },
+                            {
+                                "text": "📆 改弹性天数",
+                                "callback_data": f"trip_flex_guide_{tid}",
+                            },
+                        ],
                         [{"text": "↩️ 返回", "callback_data": "show_trips"}],
-                    ]
+                    ],
                 )
             else:
                 tg_send(f"❌ 行程 #{tid} 不存在")
@@ -810,7 +960,9 @@ def _handle_callback(callback_id, data, message_id, _loop=None):
     elif data.startswith("trip_budget_guide_"):
         tid = data.split("_")[-1]
         tg_answer_callback(callback_id)
-        tg_send(f"💰 修改预算，请输入：\n\n`/trip budget {tid} 新金额`\n\n例: `/trip budget {tid} 2000`")
+        tg_send(
+            f"💰 修改预算，请输入：\n\n`/trip budget {tid} 新金额`\n\n例: `/trip budget {tid} 2000`"
+        )
 
     elif data.startswith("trip_flex_guide_"):
         tid = data.split("_")[-1]
@@ -844,12 +996,14 @@ def _handle_callback(callback_id, data, message_id, _loop=None):
 # 文字命令分发（全同步，由 tg_command_listener 通过 asyncio.to_thread 调用）
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+
 def _dispatch_text_command(text: str, _loop=None) -> None:
     """
     同步处理所有文字命令。
     在 asyncio.to_thread 中执行，DB 查询和 HTTP 均不阻塞事件循环。
     _loop: 主事件循环引用，跨线程触发 asyncio.Event 时用 call_soon_threadsafe。
     """
+
     def _event_set(event):
         if _loop is not None:
             _loop.call_soon_threadsafe(event.set)
@@ -949,7 +1103,9 @@ def _dispatch_text_command(text: str, _loop=None) -> None:
             except Exception as e:
                 tg_send(f"❌ {e}")
         else:
-            tg_send("格式: `/trip date 编号 去程 回程`\n例: `/trip date 1 2026-09-18 2026-09-28`")
+            tg_send(
+                "格式: `/trip date 编号 去程 回程`\n例: `/trip date 1 2026-09-18 2026-09-28`"
+            )
     elif text.startswith("/trip flex"):
         parts = text.split()
         if len(parts) >= 5:
@@ -964,7 +1120,9 @@ def _dispatch_text_command(text: str, _loop=None) -> None:
                     tg_send(error)
                     return
                 if update_trip_flex(tid, ob_flex, rt_flex):
-                    tg_send(f"📆 行程 #{tid} 弹性已更新\n去程±{ob_flex}天 回程±{rt_flex}天")
+                    tg_send(
+                        f"📆 行程 #{tid} 弹性已更新\n去程±{ob_flex}天 回程±{rt_flex}天"
+                    )
                 else:
                     tg_send(f"❌ 行程 #{tid} 不存在")
             except ValueError:
@@ -980,6 +1138,7 @@ def _dispatch_text_command(text: str, _loop=None) -> None:
                 tid = int(parts[2])
                 tokens = parts[3:]
                 from app.db import _TIME_WINDOW_COLS
+
                 windows = {}
                 err = None
                 i = 0
@@ -995,7 +1154,9 @@ def _dispatch_text_command(text: str, _loop=None) -> None:
                                 err = f"❌ {tok} 时间范围无效 (小时须在 0-23，如 19-23 或跨天 22-2)"
                                 break
                             if s > e and (s - e) >= 23:
-                                err = f"❌ {tok} 跨天窗口覆盖全天，等于不过滤，请缩小范围"
+                                err = (
+                                    f"❌ {tok} 跨天窗口覆盖全天，等于不过滤，请缩小范围"
+                                )
                                 break
                             windows[tok] = (s, e)
                             i += 2
@@ -1009,11 +1170,20 @@ def _dispatch_text_command(text: str, _loop=None) -> None:
                     tg_send(err)
                     return
                 if not windows:
-                    tg_send("格式: `/trip time 编号 ob-dep HH-HH [ob-arr HH-HH] [rt-dep HH-HH] [rt-arr HH-HH]`")
+                    tg_send(
+                        "格式: `/trip time 编号 ob-dep HH-HH [ob-arr HH-HH] [rt-dep HH-HH] [rt-arr HH-HH]`"
+                    )
                     return
                 if update_trip_time_windows(tid, windows):
-                    labels = {"ob-dep": "去出发", "ob-arr": "去到达", "rt-dep": "回出发", "rt-arr": "回到达"}
-                    summary = "  ".join(f"{labels[k]}: {v[0]}-{v[1]}点" for k, v in windows.items())
+                    labels = {
+                        "ob-dep": "去出发",
+                        "ob-arr": "去到达",
+                        "rt-dep": "回出发",
+                        "rt-arr": "回到达",
+                    }
+                    summary = "  ".join(
+                        f"{labels[k]}: {v[0]}-{v[1]}点" for k, v in windows.items()
+                    )
                     tg_send(f"⏰ 行程 #{tid} 时间窗已更新\n{summary}")
                 else:
                     tg_send(f"❌ 行程 #{tid} 不存在")
@@ -1022,7 +1192,9 @@ def _dispatch_text_command(text: str, _loop=None) -> None:
             except Exception as e:
                 tg_send(f"❌ {e}")
         else:
-            tg_send("格式: `/trip time 编号 ob-dep HH-HH [ob-arr HH-HH] [rt-dep HH-HH] [rt-arr HH-HH]`")
+            tg_send(
+                "格式: `/trip time 编号 ob-dep HH-HH [ob-arr HH-HH] [rt-dep HH-HH] [rt-arr HH-HH]`"
+            )
     elif text == "/help":
         _handle_help()
     elif ACK_KEYWORD in text:
@@ -1033,6 +1205,7 @@ def _dispatch_text_command(text: str, _loop=None) -> None:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 主监听循环
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 
 async def tg_command_listener():
     """后台监听 TG 命令和按钮回调"""
@@ -1065,13 +1238,17 @@ async def tg_command_listener():
                     cb_id = callback["id"]
                     cb_data = callback.get("data", "")
                     cb_msg_id = callback.get("message", {}).get("message_id")
-                    chat_id = str(callback.get("message", {}).get("chat", {}).get("id", ""))
+                    chat_id = str(
+                        callback.get("message", {}).get("chat", {}).get("id", "")
+                    )
                     if chat_id in TG_ALLOWED_CHATS:
                         try:
                             # asyncio.to_thread：_handle_callback 内部全是同步 HTTP，
                             # 不应阻塞事件循环。_loop 引用保证 force_check_event.set
                             # 通过 call_soon_threadsafe 安全跨线程触发。
-                            await asyncio.to_thread(_handle_callback, cb_id, cb_data, cb_msg_id, _loop)
+                            await asyncio.to_thread(
+                                _handle_callback, cb_id, cb_data, cb_msg_id, _loop
+                            )
                         except Exception as e:
                             log.error(f"处理按钮回调异常 [{cb_data}]: {e}")
                             try:
@@ -1092,6 +1269,18 @@ async def tg_command_listener():
                 chat_id = str(msg.get("chat", {}).get("id", ""))
 
                 if chat_id not in TG_ALLOWED_CHATS:
+                    continue
+
+                if _is_rate_limited(chat_id):
+                    try:
+                        await asyncio.to_thread(
+                            tg_send,
+                            "⏳ 请稍后再试（每分钟最多 {} 条命令）".format(
+                                BOT_RATE_LIMIT_PER_MINUTE
+                            ),
+                        )
+                    except Exception:
+                        pass
                     continue
 
                 await asyncio.to_thread(_dispatch_text_command, text, _loop)

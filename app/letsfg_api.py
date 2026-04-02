@@ -38,13 +38,19 @@ def _currency_to_cny(price, currency: str | None):
         usd_cny, jpy_cny = get_exchange_rates()
     except Exception:
         usd_cny, jpy_cny = 7.2, 0.048
+    try:
+        from app.spring_api import get_exchange_rates as _get_rates
+
+        _usd, _jpy = _get_rates()
+    except Exception:
+        _usd, _jpy = usd_cny, jpy_cny
     rates = {
         "USD": usd_cny,
         "JPY": jpy_cny,
-        "EUR": 7.8,
-        "GBP": 9.1,
-        "HKD": 0.92,
-        "SGD": 5.35,
+        "EUR": round(usd_cny * 0.92, 2),
+        "GBP": round(usd_cny * 1.27, 2),
+        "HKD": round(usd_cny / 7.8, 2),
+        "SGD": round(usd_cny * 0.74, 2),
     }
     rate = rates.get(currency)
     if rate is None:
@@ -136,10 +142,7 @@ def _extract_segment(offer: dict) -> tuple[str, str, str, str]:
     if isinstance(airline, dict):
         airline = airline.get("name") or airline.get("code") or ""
     flight_no = (
-        seg.get("flight_no")
-        or seg.get("flightNumber")
-        or seg.get("number")
-        or ""
+        seg.get("flight_no") or seg.get("flightNumber") or seg.get("number") or ""
     )
     dep = _normalize_time(
         seg.get("departure_time")
@@ -163,7 +166,9 @@ def _parse_offers(payload, origin: str, destination: str) -> list[dict]:
         offers = payload
         currency = None
     else:
-        offers = payload.get("offers") or payload.get("results") or payload.get("data") or []
+        offers = (
+            payload.get("offers") or payload.get("results") or payload.get("data") or []
+        )
         currency = payload.get("currency")
     flights = []
     for offer in offers:
@@ -244,7 +249,9 @@ def get_letsfg_flights_for_searches(searches, proxy_url=None, proxy_id=None):
             if flights:
                 result["flights"] = flights
                 result["lowest_price"] = flights[0]["price_cny"]
-                log.info(f"  ✓ LetsFG: {origin}→{destination} {date_str} {len(flights)} 个航班, 最低 ¥{result['lowest_price']}")
+                log.info(
+                    f"  ✓ LetsFG: {origin}→{destination} {date_str} {len(flights)} 个航班, 最低 ¥{result['lowest_price']}"
+                )
             else:
                 result["error"] = "LetsFG 返回空结果"
         except Exception as e:

@@ -44,7 +44,18 @@ def finalize_result_status(result: dict) -> dict:
         result["block_reason"] = None
     elif result.get("status") not in {"blocked", "degraded"}:
         error_text = str(result.get("error") or "").lower()
-        if any(token in error_text for token in ("captcha", "验证码", "login", "forbidden", "rate limit", "waf", "access denied")):
+        if any(
+            token in error_text
+            for token in (
+                "captcha",
+                "验证码",
+                "login",
+                "forbidden",
+                "rate limit",
+                "waf",
+                "access denied",
+            )
+        ):
             result["status"] = "blocked"
             result["retryable"] = False
             result["block_reason"] = infer_block_reason(error_text)
@@ -63,10 +74,13 @@ def infer_block_reason(text: str) -> str:
 
 
 def classify_http_status(status_code: int) -> tuple[str, str | None, bool]:
-    if status_code in {403, 405}:
+    if status_code == 403:
         return "blocked", "waf", False
+    if status_code == 405:
+        # 405 often retryable after WAF warmup (e.g., Spring Airlines)
+        return "blocked", "waf", True
     if status_code == 429:
-        return "blocked", "rate_limit", False
+        return "blocked", "rate_limit", True  # rate limit is transient
     if status_code >= 500:
         return "degraded", "network", True
     return "no_data", None, True
@@ -74,12 +88,21 @@ def classify_http_status(status_code: int) -> tuple[str, str | None, bool]:
 
 def classify_exception(exc: Exception | str) -> tuple[str, str, bool]:
     text = str(exc).lower()
-    if any(token in text for token in ("403", "405", "429", "forbidden", "access denied", "captcha", "waf")):
+    # Permanent blocks (captcha, explicit denial)
+    if any(token in text for token in ("captcha", "forbidden", "access denied")):
         return "blocked", infer_block_reason(text), False
+    # Retryable blocks (WAF, rate limit, 405)
+    if any(token in text for token in ("405", "429", "waf", "rate limit")):
+        return "blocked", infer_block_reason(text), True
+    # 403 is ambiguous — mark blocked but retryable for proxy rotation
+    if "403" in text:
+        return "blocked", infer_block_reason(text), True
     return "degraded", "network", True
 
 
-def inspect_browser_page(text: str, title: str = "", url: str = "") -> tuple[str, str | None]:
+def inspect_browser_page(
+    text: str, title: str = "", url: str = ""
+) -> tuple[str, str | None]:
     haystack = " ".join(part for part in [text, title, url] if part).lower()
     for reason, patterns in _BLOCK_PATTERNS.items():
         if reason == "empty_page":

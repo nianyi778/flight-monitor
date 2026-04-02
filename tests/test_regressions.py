@@ -14,26 +14,30 @@ class _FakeFastMCP:
     def tool(self, *args, **kwargs):
         def decorator(func):
             return func
+
         return decorator
 
     def resource(self, *args, **kwargs):
         def decorator(func):
             return func
+
         return decorator
 
     def custom_route(self, *args, **kwargs):
         def decorator(func):
             return func
+
         return decorator
 
 
 sys.modules.setdefault("fastmcp", types.SimpleNamespace(FastMCP=_FakeFastMCP))
 sys.modules.setdefault("starlette.requests", types.SimpleNamespace(Request=object))
-sys.modules.setdefault("starlette.responses", types.SimpleNamespace(JSONResponse=object))
+sys.modules.setdefault(
+    "starlette.responses", types.SimpleNamespace(JSONResponse=object)
+)
 
 from app.bot import (
     _parse_flex_arg,
-    _parse_window_arg,
     _validate_budget_value,
     _validate_date_pair,
 )
@@ -54,34 +58,83 @@ from app.config import now_jst
 class MatcherRegressionTests(unittest.TestCase):
     def test_time_windows_filter_out_invalid_flights(self):
         trip = {
+            "id": 1,
             "outbound_date": "2026-09-18",
             "return_date": "2026-09-28",
             "budget": 1500,
-            "depart_after": 19,
-            "depart_before": 23,
-            "arrive_after": 0,
-            "arrive_before": 6,
+            "trip_type": "round_trip",
+            "origin": "TYO",
+            "destination": "PVG",
+            "max_stops": None,
+            "throwaway": False,
+            "ob_depart_start": 19,
+            "ob_depart_end": 23,
+            "ob_arrive_start": None,
+            "ob_arrive_end": None,
+            "rt_depart_start": None,
+            "rt_depart_end": None,
+            "rt_arrive_start": 0,
+            "rt_arrive_end": 6,
         }
         results = {
-            "outbound": [{
-                "source": "test-ob",
-                "url": "ob",
-                "flight_date": "2026-09-18",
-                "flights": [
-                    {"airline": "TooEarly", "departure_time": "18:30", "arrival_time": "21:00", "price_cny": 100, "origin": "NRT", "destination": "PVG"},
-                    {"airline": "ValidOB", "departure_time": "20:30", "arrival_time": "23:10", "price_cny": 200, "origin": "NRT", "destination": "PVG"},
-                    {"airline": "TooLate", "departure_time": "17:30", "arrival_time": "20:00", "price_cny": 50, "origin": "NRT", "destination": "PVG"},
-                ],
-            }],
-            "return": [{
-                "source": "test-rt",
-                "url": "rt",
-                "flight_date": "2026-09-28",
-                "flights": [
-                    {"airline": "BadRT", "departure_time": "10:00", "arrival_time": "08:30", "price_cny": 100, "origin": "PVG", "destination": "NRT"},
-                    {"airline": "ValidRT", "departure_time": "12:00", "arrival_time": "05:45", "price_cny": 300, "origin": "PVG", "destination": "NRT"},
-                ],
-            }],
+            "outbound": [
+                {
+                    "source": "test-ob",
+                    "url": "ob",
+                    "flight_date": "2026-09-18",
+                    "flights": [
+                        {
+                            "airline": "TooEarly",
+                            "departure_time": "18:30",
+                            "arrival_time": "21:00",
+                            "price_cny": 100,
+                            "origin": "NRT",
+                            "destination": "PVG",
+                        },
+                        {
+                            "airline": "ValidOB",
+                            "departure_time": "20:30",
+                            "arrival_time": "23:10",
+                            "price_cny": 200,
+                            "origin": "NRT",
+                            "destination": "PVG",
+                        },
+                        {
+                            "airline": "TooLate",
+                            "departure_time": "17:30",
+                            "arrival_time": "20:00",
+                            "price_cny": 50,
+                            "origin": "NRT",
+                            "destination": "PVG",
+                        },
+                    ],
+                }
+            ],
+            "return": [
+                {
+                    "source": "test-rt",
+                    "url": "rt",
+                    "flight_date": "2026-09-28",
+                    "flights": [
+                        {
+                            "airline": "BadRT",
+                            "departure_time": "10:00",
+                            "arrival_time": "08:30",
+                            "price_cny": 100,
+                            "origin": "PVG",
+                            "destination": "NRT",
+                        },
+                        {
+                            "airline": "ValidRT",
+                            "departure_time": "12:00",
+                            "arrival_time": "05:45",
+                            "price_cny": 300,
+                            "origin": "PVG",
+                            "destination": "NRT",
+                        },
+                    ],
+                }
+            ],
         }
 
         combos = find_best_combinations(results, trip)
@@ -103,11 +156,6 @@ class BotValidationTests(unittest.TestCase):
         self.assertIsNone(pair)
         self.assertIn("已过期", error)
 
-    def test_window_validation_rejects_reversed_range(self):
-        window, error = _parse_window_arg("去23-19", "去", "去程时间")
-        self.assertIsNone(window)
-        self.assertIn("起始应小于等于结束", error)
-
     def test_flex_validation_rejects_out_of_range(self):
         value, error = _parse_flex_arg("回8", "回", "回程弹性")
         self.assertIsNone(value)
@@ -126,7 +174,9 @@ class RuntimeControlTests(unittest.TestCase):
         state = {}
         ensure_runtime_state(state)
         now_dt = now_jst()
-        metrics = init_check_metrics(check_id=3, due_trips=2, total_searches=5, started_at=now_dt)
+        metrics = init_check_metrics(
+            check_id=3, due_trips=2, total_searches=5, started_at=now_dt
+        )
 
         record_check_metric_event(
             metrics,
@@ -233,6 +283,7 @@ class DbSaveRegressionTests(unittest.TestCase):
     def _run_save(self, results, trip=None):
         """执行 save_to_db，收集所有 INSERT 参数，返回 inserted_rows"""
         from app.db import save_to_db
+
         trip = trip or self._make_trip()
         inserted_rows = []
 
@@ -242,21 +293,43 @@ class DbSaveRegressionTests(unittest.TestCase):
                     inserted_rows.append(params)
 
         class FakeConn:
-            def cursor(self_): return FakeCur()
-            def commit(self_): pass
-            def rollback(self_): pass
-            def close(self_): pass
-            def __enter__(self_): return self_
-            def __exit__(self_, *a): pass
+            def cursor(self_):
+                return FakeCur()
+
+            def commit(self_):
+                pass
+
+            def rollback(self_):
+                pass
+
+            def close(self_):
+                pass
+
+            def __enter__(self_):
+                return self_
+
+            def __exit__(self_, *a):
+                pass
 
         with patch("app.db.get_db", return_value=FakeConn()):
             save_to_db(results, [], trip)
         return inserted_rows
 
     def test_normal_flight_is_inserted(self):
-        flights = [{"airline": "ANA", "flight_no": "NH101", "departure_time": "20:00",
-                    "arrival_time": "22:00", "origin": "NRT", "destination": "PVG",
-                    "price_cny": 1500, "original_price": 210, "original_currency": "USD", "stops": 0}]
+        flights = [
+            {
+                "airline": "ANA",
+                "flight_no": "NH101",
+                "departure_time": "20:00",
+                "arrival_time": "22:00",
+                "origin": "NRT",
+                "destination": "PVG",
+                "price_cny": 1500,
+                "original_price": 210,
+                "original_currency": "USD",
+                "stops": 0,
+            }
+        ]
         rows = self._run_save(self._make_results(flights, flights))
         self.assertEqual(len(rows), 2)
         # flight_no 字段在 params 的索引 5
@@ -265,9 +338,20 @@ class DbSaveRegressionTests(unittest.TestCase):
     def test_uuid_flight_no_is_truncated_to_20_chars(self):
         """Critical #1 回归：UUID 不应再触发 VARCHAR(20) 溢出"""
         uuid_flight_no = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
-        flights = [{"airline": "X", "flight_no": uuid_flight_no, "departure_time": "20:00",
-                    "arrival_time": "22:00", "origin": "NRT", "destination": "PVG",
-                    "price_cny": 999, "original_price": None, "original_currency": "CNY", "stops": 0}]
+        flights = [
+            {
+                "airline": "X",
+                "flight_no": uuid_flight_no,
+                "departure_time": "20:00",
+                "arrival_time": "22:00",
+                "origin": "NRT",
+                "destination": "PVG",
+                "price_cny": 999,
+                "original_price": None,
+                "original_currency": "CNY",
+                "stops": 0,
+            }
+        ]
         rows = self._run_save(self._make_results(flights, []))
         self.assertEqual(len(rows), 1)
         stored_flight_no = rows[0][5]
@@ -275,9 +359,20 @@ class DbSaveRegressionTests(unittest.TestCase):
 
     def test_long_airline_name_is_truncated_to_50_chars(self):
         long_airline = "A" * 80
-        flights = [{"airline": long_airline, "flight_no": "AA1", "departure_time": "20:00",
-                    "arrival_time": "22:00", "origin": "NRT", "destination": "PVG",
-                    "price_cny": 999, "original_price": None, "original_currency": "CNY", "stops": 0}]
+        flights = [
+            {
+                "airline": long_airline,
+                "flight_no": "AA1",
+                "departure_time": "20:00",
+                "arrival_time": "22:00",
+                "origin": "NRT",
+                "destination": "PVG",
+                "price_cny": 999,
+                "original_price": None,
+                "original_currency": "CNY",
+                "stops": 0,
+            }
+        ]
         rows = self._run_save(self._make_results(flights, []))
         stored_airline = rows[0][4]
         self.assertLessEqual(len(stored_airline), 50)
@@ -285,11 +380,25 @@ class DbSaveRegressionTests(unittest.TestCase):
     def test_long_source_is_truncated_to_30_chars(self):
         long_source = "S" * 60
         results = {
-            "outbound": [{"source": long_source, "flights": [
-                {"airline": "X", "flight_no": "X1", "departure_time": "20:00",
-                 "arrival_time": "22:00", "origin": "NRT", "destination": "PVG",
-                 "price_cny": 999, "original_price": None, "original_currency": "CNY", "stops": 0}
-            ]}],
+            "outbound": [
+                {
+                    "source": long_source,
+                    "flights": [
+                        {
+                            "airline": "X",
+                            "flight_no": "X1",
+                            "departure_time": "20:00",
+                            "arrival_time": "22:00",
+                            "origin": "NRT",
+                            "destination": "PVG",
+                            "price_cny": 999,
+                            "original_price": None,
+                            "original_currency": "CNY",
+                            "stops": 0,
+                        }
+                    ],
+                }
+            ],
             "return": [],
         }
         rows = self._run_save(results)
@@ -299,10 +408,20 @@ class DbSaveRegressionTests(unittest.TestCase):
     def test_bad_row_does_not_abort_batch(self):
         """Critical #2 回归：一行抛异常，其余行仍应写入"""
         from app.db import save_to_db
+
         trip = self._make_trip()
-        good_flight = {"airline": "ANA", "flight_no": "NH101", "departure_time": "20:00",
-                       "arrival_time": "22:00", "origin": "NRT", "destination": "PVG",
-                       "price_cny": 1500, "original_price": None, "original_currency": "CNY", "stops": 0}
+        good_flight = {
+            "airline": "ANA",
+            "flight_no": "NH101",
+            "departure_time": "20:00",
+            "arrival_time": "22:00",
+            "origin": "NRT",
+            "destination": "PVG",
+            "price_cny": 1500,
+            "original_price": None,
+            "original_currency": "CNY",
+            "stops": 0,
+        }
         results = {
             "outbound": [{"source": "s", "flights": [good_flight, good_flight]}],
             "return": [],
@@ -318,12 +437,23 @@ class DbSaveRegressionTests(unittest.TestCase):
                         raise Exception("simulated DB error on row 1")
 
         class FakeConnWithError:
-            def cursor(self_): return FakeCurWithError()
-            def commit(self_): pass
-            def rollback(self_): pass
-            def close(self_): pass
-            def __enter__(self_): return self_
-            def __exit__(self_, *a): pass
+            def cursor(self_):
+                return FakeCurWithError()
+
+            def commit(self_):
+                pass
+
+            def rollback(self_):
+                pass
+
+            def close(self_):
+                pass
+
+            def __enter__(self_):
+                return self_
+
+            def __exit__(self_, *a):
+                pass
 
         with patch("app.db.get_db", return_value=FakeConnWithError()):
             with self.assertLogs("flight_monitor", level="WARNING"):
@@ -335,6 +465,7 @@ class DbSaveRegressionTests(unittest.TestCase):
     def test_letsfg_extract_segment_no_uuid_fallback(self):
         """Critical #1 根本修复验证：_extract_segment 不应把 id 当 flight_no"""
         from app.letsfg_api import _extract_segment
+
         offer = {
             "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
             "airline": "ANA",

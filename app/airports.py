@@ -5,27 +5,29 @@
 - 路由对生成
 """
 
+from app.config import log
+
 # 机场组：metro code → 组内所有 IATA 机场
 # 仅 TYO / OSA 等不与单个机场 IATA 冲突的 metro code 用作组
 AIRPORT_GROUPS: dict[str, list[str]] = {
-    "TYO": ["NRT", "HND"],       # 东京大都市圈
-    "OSA": ["KIX", "ITM"],       # 大阪/关西
-    "NGO": ["NGO"],              # 名古屋（单机场）
-    "CTS": ["CTS"],              # 札幌（单机场）
-    "FUK": ["FUK"],              # 福冈（单机场）
-    "OKA": ["OKA"],              # 冲绳（单机场）
-    "SYD": ["SYD"],              # 悉尼
-    "MEL": ["MEL"],              # 墨尔本
-    "LAX": ["LAX"],              # 洛杉矶
-    "YVR": ["YVR"],              # 温哥华
-    "SIN": ["SIN"],              # 新加坡
-    "BKK": ["BKK", "DMK"],      # 曼谷
-    "SEL": ["ICN", "GMP"],      # 首尔
-    "CAN": ["CAN"],              # 广州
-    "CTU": ["CTU"],              # 成都
-    "HKG": ["HKG"],              # 香港
-    "PEK": ["PEK", "PKX"],      # 北京
-    "SZX": ["SZX"],              # 深圳
+    "TYO": ["NRT", "HND"],  # 东京大都市圈
+    "OSA": ["KIX", "ITM"],  # 大阪/关西
+    "NGO": ["NGO"],  # 名古屋（单机场）
+    "CTS": ["CTS"],  # 札幌（单机场）
+    "FUK": ["FUK"],  # 福冈（单机场）
+    "OKA": ["OKA"],  # 冲绳（单机场）
+    "SYD": ["SYD"],  # 悉尼
+    "MEL": ["MEL"],  # 墨尔本
+    "LAX": ["LAX"],  # 洛杉矶
+    "YVR": ["YVR"],  # 温哥华
+    "SIN": ["SIN"],  # 新加坡
+    "BKK": ["BKK", "DMK"],  # 曼谷
+    "SEL": ["ICN", "GMP"],  # 首尔
+    "CAN": ["CAN"],  # 广州
+    "CTU": ["CTU"],  # 成都
+    "HKG": ["HKG"],  # 香港
+    "PEK": ["PEK", "PKX"],  # 北京
+    "SZX": ["SZX"],  # 深圳
 }
 
 # 上海机场作为单机场使用（PVG=浦东, SHA=虹桥），不建组避免与 IATA 冲突
@@ -33,21 +35,34 @@ AIRPORT_GROUPS: dict[str, list[str]] = {
 
 # 已知单机场 IATA（验证用）
 KNOWN_AIRPORTS: set[str] = {
-    "NRT", "HND",               # 东京
-    "PVG", "SHA",               # 上海
-    "KIX", "ITM",               # 大阪
-    "NGO",                      # 名古屋
-    "CTS",                      # 札幌
-    "FUK",                      # 福冈
-    "OKA",                      # 冲绳
-    "SYD", "MEL",               # 澳大利亚
-    "LAX", "SFO", "JFK",        # 美国
-    "YVR", "YYZ",               # 加拿大
-    "SIN",                      # 新加坡
-    "BKK", "DMK",               # 泰国
-    "ICN", "GMP",               # 韩国
-    "CAN", "CTU", "HKG",        # 中国大陆/港
-    "PEK", "PKX", "SZX",
+    "NRT",
+    "HND",  # 东京
+    "PVG",
+    "SHA",  # 上海
+    "KIX",
+    "ITM",  # 大阪
+    "NGO",  # 名古屋
+    "CTS",  # 札幌
+    "FUK",  # 福冈
+    "OKA",  # 冲绳
+    "SYD",
+    "MEL",  # 澳大利亚
+    "LAX",
+    "SFO",
+    "JFK",  # 美国
+    "YVR",
+    "YYZ",  # 加拿大
+    "SIN",  # 新加坡
+    "BKK",
+    "DMK",  # 泰国
+    "ICN",
+    "GMP",  # 韩国
+    "CAN",
+    "CTU",
+    "HKG",  # 中国大陆/港
+    "PEK",
+    "PKX",
+    "SZX",
 }
 
 # 甩尾延伸目的地：真实目的地 → 常用 beyond 机场列表
@@ -73,7 +88,14 @@ def expand_airport(code: str) -> list[str]:
 
 def normalize_airport(code: str) -> str:
     """统一大写；验证是否为已知机场或组代码。返回原值（不抛异常）。"""
-    return code.upper().strip()
+    normalized = code.upper().strip()
+    if (
+        normalized
+        and normalized not in KNOWN_AIRPORTS
+        and normalized not in AIRPORT_GROUPS
+    ):
+        log.warning(f"未知机场代码: {normalized}")
+    return normalized
 
 
 def get_route_pairs(origin: str, destination: str) -> list[tuple[str, str]]:

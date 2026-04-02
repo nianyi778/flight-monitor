@@ -27,17 +27,17 @@ def _in_time_window(hour, start, end):
         return hour >= start or hour <= end
 
 
-def _date_range(base_date_str, flex_days, direction="before"):
-    """生成日期列表：base_date 向前(before)或向后(after) flex_days 天"""
+def _date_range(base_date_str, flex_days, direction="both"):
+    """生成日期列表：base_date ± flex_days 天"""
     base = datetime.strptime(base_date_str, "%Y-%m-%d").date()
     dates = [base_date_str]
     for i in range(1, flex_days + 1):
-        if direction == "before":
-            d = base - timedelta(days=i)
-        else:
-            d = base + timedelta(days=i)
-        dates.append(str(d))
-    return dates
+        if direction in ("before", "both"):
+            dates.append(str(base - timedelta(days=i)))
+        if direction in ("after", "both"):
+            dates.append(str(base + timedelta(days=i)))
+    seen = set()
+    return [d for d in dates if d not in seen and not seen.add(d)]
 
 
 def _effective_flex(trip, days_to_depart):
@@ -52,7 +52,9 @@ def _effective_flex(trip, days_to_depart):
         return ob_flex, rt_flex
 
 
-def _flight_passes_filters(f, depart_start, depart_end, arrive_start, arrive_end, max_stops):
+def _flight_passes_filters(
+    f, depart_start, depart_end, arrive_start, arrive_end, max_stops
+):
     """
     检查单个航班是否通过时间窗和经停过滤。
     时间窗 None = 不过滤该维度。无时间数据的航班通过过滤（不丢弃）。
@@ -85,12 +87,15 @@ def get_search_urls(trip):
     """
     is_one_way = trip.get("trip_type") == "one_way"
     days_to_depart = (
-        datetime.strptime(trip["outbound_date"], "%Y-%m-%d").date() - datetime.now().date()
+        datetime.strptime(trip["outbound_date"], "%Y-%m-%d").date()
+        - datetime.now().date()
     ).days
     ob_flex, rt_flex = _effective_flex(trip, days_to_depart)
 
-    ob_dates = _date_range(trip["outbound_date"], ob_flex, "before")
-    rt_dates = [] if is_one_way else _date_range(trip.get("return_date", ""), rt_flex, "before")
+    ob_dates = _date_range(trip["outbound_date"], ob_flex, "both")
+    rt_dates = (
+        [] if is_one_way else _date_range(trip.get("return_date", ""), rt_flex, "both")
+    )
 
     origin = trip.get("origin", "TYO")
     destination = trip.get("destination", "PVG")
@@ -99,48 +104,58 @@ def get_search_urls(trip):
     ob_pairs = get_route_pairs(origin, destination)
     rt_pairs = [(d, o) for o, d in ob_pairs]
 
+    max_stops = trip.get("max_stops")
+
     urls = []
 
     def _add_urls(pairs, direction, dates):
         for orig, dest in pairs:
             pair_str = f"{orig}-{dest}"
             pair_label = f"{orig}→{dest}"
-            base_date = trip["outbound_date"] if direction == "outbound" else trip.get("return_date", "")
+            base_date = (
+                trip["outbound_date"]
+                if direction == "outbound"
+                else trip.get("return_date", "")
+            )
             dir_label = "去程" if direction == "outbound" else "回程"
 
             for date in dates:
                 suffix = f"({date})" if date != base_date else ""
 
                 # Kiwi.com（GraphQL API，零认证，覆盖 MU/CA/NH/9C/HO 等全航司）
-                urls.append({
-                    "name": f"Kiwi_{pair_str}{suffix}",
-                    "direction": direction,
-                    "label": f"{dir_label} {pair_label} {date} [Kiwi]",
-                    "url": f"kiwi://search/{orig}-{dest}/{date}",
-                    "wait": 0,
-                    "flight_date": date,
-                    "origin": orig,
-                    "destination": dest,
-                    "source_type": "kiwi",
-                    "throwaway_for": None,
-                })
+                urls.append(
+                    {
+                        "name": f"Kiwi_{pair_str}{suffix}",
+                        "direction": direction,
+                        "label": f"{dir_label} {pair_label} {date} [Kiwi]",
+                        "url": f"kiwi://search/{orig}-{dest}/{date}",
+                        "wait": 0,
+                        "flight_date": date,
+                        "origin": orig,
+                        "destination": dest,
+                        "source_type": "kiwi",
+                        "throwaway_for": None,
+                    }
+                )
 
                 # Google（与 Kiwi 同步覆盖所有弹性日期，避免漏掉非基准日的低价）
-                urls.append({
-                    "name": f"Google_{pair_str}{suffix}",
-                    "direction": direction,
-                    "label": f"{dir_label} {pair_label} {date} [Google]",
-                    "url": (
-                        f"https://www.google.co.jp/travel/flights"
-                        f"#flt={orig}.{dest}.{date};c:JPY;e:1;sd:1;t:f"
-                    ),
-                    "wait": 10,
-                    "flight_date": date,
-                    "origin": orig,
-                    "destination": dest,
-                    "source_type": "google",
-                    "throwaway_for": None,
-                })
+                urls.append(
+                    {
+                        "name": f"Google_{pair_str}{suffix}",
+                        "direction": direction,
+                        "label": f"{dir_label} {pair_label} {date} [Google]",
+                        "url": (
+                            f"https://www.google.co.jp/travel/flights"
+                            f"#flt={orig}.{dest}.{date};c:JPY;e:1;sd:1;t:f"
+                        ),
+                        "wait": 10,
+                        "flight_date": date,
+                        "origin": orig,
+                        "destination": dest,
+                        "source_type": "google",
+                        "throwaway_for": None,
+                    }
+                )
 
     _add_urls(ob_pairs, "outbound", ob_dates)
     if not is_one_way:
@@ -157,15 +172,15 @@ def find_best_combinations(results, trip):
 
     # 去程时间窗
     ob_depart_start = trip.get("ob_depart_start")
-    ob_depart_end   = trip.get("ob_depart_end")
+    ob_depart_end = trip.get("ob_depart_end")
     ob_arrive_start = trip.get("ob_arrive_start")
-    ob_arrive_end   = trip.get("ob_arrive_end")
+    ob_arrive_end = trip.get("ob_arrive_end")
 
     # 回程时间窗
     rt_depart_start = trip.get("rt_depart_start")
-    rt_depart_end   = trip.get("rt_depart_end")
+    rt_depart_end = trip.get("rt_depart_end")
     rt_arrive_start = trip.get("rt_arrive_start")
-    rt_arrive_end   = trip.get("rt_arrive_end")
+    rt_arrive_end = trip.get("rt_arrive_end")
 
     # 真实目的地（用于甩尾检测）
     true_dest_iatas = set(expand_airport(trip.get("destination", "")))
@@ -181,8 +196,12 @@ def find_best_combinations(results, trip):
             is_throwaway = bool(via_airports & true_dest_iatas)
 
             if not _flight_passes_filters(
-                f, ob_depart_start, ob_depart_end,
-                ob_arrive_start, ob_arrive_end, max_stops
+                f,
+                ob_depart_start,
+                ob_depart_end,
+                ob_arrive_start,
+                ob_arrive_end,
+                max_stops,
             ):
                 continue
 
@@ -204,7 +223,14 @@ def find_best_combinations(results, trip):
         seen = set()
         result = []
         for f in flights:
-            key = (f.get("airline", ""), f.get("flight_no", ""), f.get("departure_time", ""), f.get("price_cny"))
+            key = (
+                f.get("airline", ""),
+                f.get("flight_no", ""),
+                f.get("departure_time", ""),
+                f.get("price_cny"),
+                f.get("origin", ""),
+                f.get("destination", ""),
+            )
             if key not in seen:
                 seen.add(key)
                 result.append(f)
@@ -219,25 +245,29 @@ def find_best_combinations(results, trip):
             if ob.get("price_cny") is None:
                 continue
             total = ob["price_cny"]
-            combos.append({
-                "outbound": ob,
-                "return": None,
-                "total": total,
-                "within_budget": total <= budget,
-                "throwaway": False,
-            })
+            combos.append(
+                {
+                    "outbound": ob,
+                    "return": None,
+                    "total": total,
+                    "within_budget": total <= budget,
+                    "throwaway": False,
+                }
+            )
         # 甩尾单程 combo
         for ob in throwaway_flights[:5]:
             if ob.get("price_cny") is None:
                 continue
             total = ob["price_cny"]
-            combos.append({
-                "outbound": ob,
-                "return": None,
-                "total": total,
-                "within_budget": total <= budget,
-                "throwaway": True,
-            })
+            combos.append(
+                {
+                    "outbound": ob,
+                    "return": None,
+                    "total": total,
+                    "within_budget": total <= budget,
+                    "throwaway": True,
+                }
+            )
         combos.sort(key=lambda x: x["total"])
         return combos[:10]
 
@@ -245,8 +275,12 @@ def find_best_combinations(results, trip):
     for src in results["return"]:
         for f in src.get("flights", []):
             if not _flight_passes_filters(
-                f, rt_depart_start, rt_depart_end,
-                rt_arrive_start, rt_arrive_end, max_stops
+                f,
+                rt_depart_start,
+                rt_depart_end,
+                rt_arrive_start,
+                rt_arrive_end,
+                max_stops,
             ):
                 continue
             f["_source"] = src.get("source", "")
@@ -259,18 +293,20 @@ def find_best_combinations(results, trip):
     return_flights = _dedup(return_flights)
 
     combos = []
-    for ob in outbound_flights[:8]:
-        for rt in return_flights[:8]:
+    for ob in outbound_flights[:15]:
+        for rt in return_flights[:15]:
             if ob.get("price_cny") is None or rt.get("price_cny") is None:
                 continue
             total = ob["price_cny"] + rt["price_cny"]
-            combos.append({
-                "outbound": ob,
-                "return": rt,
-                "total": total,
-                "within_budget": total <= budget,
-                "throwaway": False,
-            })
+            combos.append(
+                {
+                    "outbound": ob,
+                    "return": rt,
+                    "total": total,
+                    "within_budget": total <= budget,
+                    "throwaway": False,
+                }
+            )
 
     combos.sort(key=lambda x: x["total"])
     return combos[:10]

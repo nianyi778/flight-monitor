@@ -50,6 +50,11 @@ ENV PYTHONUNBUFFERED=1
 ENV PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 # CHROME_PATH 在运行时由 letsfg 自动探测，无需硬编码版本号
 
+# Non-root user for security
+RUN groupadd -r appuser && useradd -r -g appuser -d /app appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
 EXPOSE 8081
 
 CMD ["python", "main.py"]

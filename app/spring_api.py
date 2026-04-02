@@ -51,10 +51,13 @@ _AIRPORT_NAMES = {
 _IJ_ORIGINS = {"NGO"}
 
 # USD/JPY → CNY 汇率（启动时为默认值，每日从免费API刷新）
+import threading
+
 USD_TO_CNY = 7.2
 JPY_TO_CNY = 0.048
 
 _rate_cache = {"date": None, "usd_cny": USD_TO_CNY, "jpy_cny": JPY_TO_CNY}
+_rate_lock = threading.Lock()
 
 
 def get_exchange_rates():
@@ -62,8 +65,9 @@ def get_exchange_rates():
     from datetime import date
 
     today = date.today()
-    if _rate_cache["date"] == today:
-        return _rate_cache["usd_cny"], _rate_cache["jpy_cny"]
+    with _rate_lock:
+        if _rate_cache["date"] == today:
+            return _rate_cache["usd_cny"], _rate_cache["jpy_cny"]
     try:
         resp = requests.get(
             "https://api.frankfurter.app/latest",
@@ -76,11 +80,13 @@ def get_exchange_rates():
         usd_cny = rates.get("CNY", _rate_cache["usd_cny"])
         usd_jpy = rates.get("JPY", None)
         jpy_cny = round(usd_cny / usd_jpy, 6) if usd_jpy else _rate_cache["jpy_cny"]
-        _rate_cache.update({"date": today, "usd_cny": usd_cny, "jpy_cny": jpy_cny})
+        with _rate_lock:
+            _rate_cache.update({"date": today, "usd_cny": usd_cny, "jpy_cny": jpy_cny})
         log.info(f"💱 汇率更新: 1USD={usd_cny:.4f}CNY, 1JPY={jpy_cny:.5f}CNY")
     except Exception as e:
         log.warning(f"💱 汇率获取失败，沿用缓存值: {e}")
-    return _rate_cache["usd_cny"], _rate_cache["jpy_cny"]
+    with _rate_lock:
+        return _rate_cache["usd_cny"], _rate_cache["jpy_cny"]
 
 
 def fetch_spring_prices(origin, destination, year_month, session=None, _cache=None):
@@ -103,7 +109,11 @@ def fetch_spring_prices(origin, destination, year_month, session=None, _cache=No
     _cache_key = (origin, destination, year_month)
     if _cache is not None and _cache_key in _cache:
         log.debug(f"  🌸 春秋价格缓存命中: {origin}→{destination} {year_month}")
-        return _cache[_cache_key], {"status": "ok", "block_reason": None, "retryable": True}
+        return _cache[_cache_key], {
+            "status": "ok",
+            "block_reason": None,
+            "retryable": True,
+        }
 
     parts = year_month.replace("-0", "-").split("-")
     dep_date = f"{parts[0]}-{parts[1]}-1"
@@ -215,7 +225,10 @@ def get_spring_price_for_trip(trip, proxy_url=None, proxy_id=None, price_cache=N
     # 搜索所有机场组合，取最便宜的
     # 去程: NRT→PVG, NRT→SHA, HND→PVG, HND→SHA
     from app.airports import get_route_pairs
-    ob_routes = get_route_pairs(trip.get("origin", "TYO"), trip.get("destination", "PVG"))
+
+    ob_routes = get_route_pairs(
+        trip.get("origin", "TYO"), trip.get("destination", "PVG")
+    )
     rt_routes = [(d, o) for o, d in ob_routes]
 
     all_ob = {}  # {(date, origin, dest): price_cny}
@@ -245,7 +258,9 @@ def get_spring_price_for_trip(trip, proxy_url=None, proxy_id=None, price_cache=N
         route_tasks += [(o, d, rt_month, "rt") for o, d in rt_routes]
 
     def _fetch(origin, dest, month, direction):
-        prices, meta = fetch_spring_prices(origin, dest, month, session, _cache=price_cache)
+        prices, meta = fetch_spring_prices(
+            origin, dest, month, session, _cache=price_cache
+        )
         return origin, dest, month, direction, prices, meta
 
     with ThreadPoolExecutor(max_workers=8) as executor:
@@ -280,18 +295,24 @@ def get_spring_price_for_trip(trip, proxy_url=None, proxy_id=None, price_cache=N
                             **prices[ob_date],
                         }
                 for i in range(1, ob_flex + 1):
-                    flex_date = str(
-                        (
-                            datetime.strptime(ob_date, "%Y-%m-%d") - timedelta(days=i)
-                        ).date()
-                    )
-                    if flex_date in prices:
-                        key = (flex_date, origin, dest)
-                        all_ob[key] = prices[flex_date]["price_cny"]
-                        result["outbound_flex"][f"{flex_date}_{origin}_{dest}"] = {
-                            "route": f"{origin}→{dest}",
-                            **prices[flex_date],
-                        }
+                    for delta in (-i, i):
+                        flex_date = str(
+                            (
+                                datetime.strptime(ob_date, "%Y-%m-%d")
+                                + timedelta(days=delta)
+                            ).date()
+                        )
+                        if flex_date in prices:
+                            key = (flex_date, origin, dest)
+                            if (
+                                key not in all_ob
+                                or prices[flex_date]["price_cny"] < all_ob[key]
+                            ):
+                                all_ob[key] = prices[flex_date]["price_cny"]
+                            result["outbound_flex"][f"{flex_date}_{origin}_{dest}"] = {
+                                "route": f"{origin}→{dest}",
+                                **prices[flex_date],
+                            }
             else:
                 if rt_date is None:
                     continue
@@ -307,18 +328,24 @@ def get_spring_price_for_trip(trip, proxy_url=None, proxy_id=None, price_cache=N
                             **prices[rt_date],
                         }
                 for i in range(1, rt_flex + 1):
-                    flex_date = str(
-                        (
-                            datetime.strptime(rt_date, "%Y-%m-%d") - timedelta(days=i)
-                        ).date()
-                    )
-                    if flex_date in prices:
-                        key = (flex_date, origin, dest)
-                        all_rt[key] = prices[flex_date]["price_cny"]
-                        result["return_flex"][f"{flex_date}_{origin}_{dest}"] = {
-                            "route": f"{origin}→{dest}",
-                            **prices[flex_date],
-                        }
+                    for delta in (-i, i):
+                        flex_date = str(
+                            (
+                                datetime.strptime(rt_date, "%Y-%m-%d")
+                                + timedelta(days=delta)
+                            ).date()
+                        )
+                        if flex_date in prices:
+                            key = (flex_date, origin, dest)
+                            if (
+                                key not in all_rt
+                                or prices[flex_date]["price_cny"] < all_rt[key]
+                            ):
+                                all_rt[key] = prices[flex_date]["price_cny"]
+                            result["return_flex"][f"{flex_date}_{origin}_{dest}"] = {
+                                "route": f"{origin}→{dest}",
+                                **prices[flex_date],
+                            }
 
     session.close()
 

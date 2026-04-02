@@ -31,84 +31,27 @@ from app.source_runtime import (
     choose_proxy,
     ensure_runtime_state,
     finalize_check_metrics,
-    force_source_cooldown,
-    get_cached_search_result,
-    get_source_status_snapshot,
     init_check_metrics,
-    penalize_proxy,
     proxy_pool_summary,
     record_check_metric_event,
     record_proxy_outcome,
     record_source_outcome,
-    source_in_cooldown,
-    store_cached_search_result,
 )
+from app.search_engine import (
+    collect_unique_searches,
+    execute_api_searches,
+    log_request_result,
+)
+from app.alerter import push_until_ack, make_spring_url
 
 
 # 优雅关闭
 shutdown_event = asyncio.Event()
 
 
-def _make_spring_url(date_str: str, orig: str, dest: str) -> str:
-    """构造春秋官网搜索 URL（flights.ch.com 要求日期去前导零，如 2026-4-20）。"""
-    parts = (date_str or "").split("-")
-    if len(parts) != 3:
-        return ""
-    try:
-        date_no_lz = f"{parts[0]}-{int(parts[1])}-{int(parts[2])}"
-    except ValueError:
-        return ""
-    return (
-        f"https://flights.ch.com/{orig.upper()}-{dest.upper()}.html"
-        f"?Mtype=0&SType=0&IfRet=false&FDate={date_no_lz}&ActId=&IsNew=1"
-    )
-
-
 def handle_signal(sig, frame):
     log.info(f"收到信号 {sig}，准备优雅关闭...")
     shutdown_event.set()
-
-
-async def push_until_ack(msg, state):
-    """每分钟推送直到确认（通过 bot listener 的 ack_received_event）。
-    state 由调用方传入，避免独立 load_state() 导致的 pending_ack 竞态覆盖。
-    """
-    from app.bot import ack_received_event
-
-    # 如果用户在进入此函数之前（通知发送→本函数调用之间的 await 窗口）
-    # 已经回复确认，event 已被设置，先检测再清除，否则会白等一个 PUSH_INTERVAL
-    if ack_received_event.is_set():
-        ack_received_event.clear()
-        state["pending_ack"] = False
-        save_state(state)
-        log.info("✅ 确认已预先收到（进入 push_until_ack 前），停止推送")
-        tg_send("✅ 已确认收到，停止推送。")
-        return
-    ack_received_event.clear()
-    push_count = 1
-
-    while not shutdown_event.is_set():
-        # 等待 PUSH_INTERVAL 秒，期间如果收到确认立即停止
-        try:
-            await asyncio.wait_for(ack_received_event.wait(), timeout=PUSH_INTERVAL)
-            # event 被 set 了 = 收到确认
-            log.info("✅ 收到确认回复，停止推送")
-            state["pending_ack"] = False
-            save_state(state)
-            tg_send("✅ 已确认收到，停止推送。")
-            return
-        except asyncio.TimeoutError:
-            pass
-
-        push_count += 1
-        log.info(f"📢 第 {push_count} 次推送...")
-        tg_send(f"📢 第{push_count}次提醒\n\n{msg}")
-
-        if push_count >= 60:
-            log.warning("达到推送上限，停止")
-            state["pending_ack"] = False
-            save_state(state)
-            break
 
 
 def _get_check_interval_for_trip(trip):
@@ -149,126 +92,6 @@ def _trip_should_check(trip, state):
         return elapsed >= interval
     except:
         return True
-
-
-def _collect_unique_searches(trips):
-    """收集所有行程的搜索URL，按(url)去重，记录每个URL关联的行程"""
-    from app.matcher import get_search_urls
-
-    url_map = {}  # url -> {"search": {...}, "trip_ids": []}
-    trip_search_map = {}  # trip_id -> [search_keys]
-
-    for trip in trips:
-        searches = get_search_urls(trip)
-        trip_search_map[trip["id"]] = []
-        for s in searches:
-            url = s["url"]
-            if url not in url_map:
-                url_map[url] = {"search": s, "trip_ids": []}
-            url_map[url]["trip_ids"].append(trip["id"])
-            trip_search_map[trip["id"]].append(url)
-
-    return url_map, trip_search_map
-
-
-def _record_results_for_source(state, source_name, results, searches):
-    now_dt = now_jst()
-    by_url = {s["url"]: s for s in searches}
-    saw_ok = False
-    saw_bad = False
-    last_reason = None
-
-    for url, result in results.items():
-        result["source_runtime"] = source_name
-        search = by_url.get(url)
-        if search:
-            store_cached_search_result(state, search, result, now_dt)
-        status = result.get("status", "no_data")
-        if status == "ok":
-            saw_ok = True
-        elif status in {"blocked", "degraded"}:
-            saw_bad = True
-            last_reason = result.get("block_reason") or result.get("error")
-        diagnosis = result.get("diagnosis") or {}
-        action = diagnosis.get("action")
-        if action == "cooldown":
-            status = "blocked"
-            saw_bad = True
-            last_reason = diagnosis.get("reason") or last_reason
-            force_source_cooldown(
-                state,
-                source_name,
-                diagnosis.get("reason") or last_reason,
-                now_dt,
-                seconds=diagnosis.get("retry_after_seconds") or None,
-            )
-        elif action == "switch_proxy":
-            penalize_proxy(
-                state, result.get("proxy_id"), source_name, now_dt, hard=True
-            )
-        elif action == "raise_alert":
-            state.setdefault("runtime_alerts", []).append(
-                {
-                    "source": source_name,
-                    "reason": diagnosis.get("reason") or result.get("error"),
-                    "time": now_dt.isoformat(),
-                }
-            )
-            state["runtime_alerts"] = state["runtime_alerts"][-20:]
-        record_proxy_outcome(state, result.get("proxy_id"), source_name, status, now_dt)
-
-    if saw_ok:
-        record_source_outcome(state, source_name, "ok", None, now_dt)
-    elif saw_bad:
-        status = next(
-            (
-                r.get("status")
-                for r in results.values()
-                if r.get("status") in {"blocked", "degraded"}
-            ),
-            "degraded",
-        )
-        record_source_outcome(state, source_name, status, last_reason, now_dt)
-
-
-def _load_cached_results(state, searches):
-    now_dt = now_jst()
-    cached = {}
-    remaining = []
-    source_name_map = {
-        "kiwi": "kiwi_api",
-        "google": "google_api",
-        "spring": "spring_api",
-    }
-    for search in searches:
-        hit = get_cached_search_result(state, search, now_dt)
-        if hit:
-            hit["source_runtime"] = source_name_map.get(
-                search.get("source_type"), hit.get("source_runtime", "unknown")
-            )
-            cached[search["url"]] = hit
-        else:
-            remaining.append(search)
-    return cached, remaining
-
-
-def _log_request_result(result, trip_ids=None):
-    trip_ids = trip_ids or []
-    log.info(
-        "source=%s mode=%s route=%s-%s date=%s status=%s block=%s cache=%s proxy=%s profile=%s flights=%s trips=%s",
-        result.get("source", ""),
-        result.get("request_mode", ""),
-        result.get("origin", "") or "",
-        result.get("destination", "") or "",
-        result.get("flight_date", ""),
-        result.get("status", ""),
-        result.get("block_reason", ""),
-        result.get("from_cache", False),
-        result.get("proxy_id", ""),
-        result.get("profile_id", ""),
-        len(result.get("flights", [])),
-        ",".join(str(t) for t in trip_ids),
-    )
 
 
 async def run_check(force=False):
@@ -323,7 +146,7 @@ async def _run_check_inner(force, all_trips, bot_module):
         )
 
     # 2. 收集去重后的搜索URL
-    url_map, trip_search_map = _collect_unique_searches(due_trips)
+    url_map, trip_search_map = collect_unique_searches(due_trips)
     total_unique = len(url_map)
     total_raw = sum(len(v) for v in trip_search_map.values())
     saved = total_raw - total_unique
@@ -336,61 +159,11 @@ async def _run_check_inner(force, all_trips, bot_module):
 
     log.info(f"🔍 搜索去重: {total_raw}个 → {total_unique}个（节省{saved}次抓取）")
 
-    # 3. API 瀑布调用（Kiwi → Google → 春秋官网）
     unique_searches = [v["search"] for v in url_map.values()]
-
     kiwi_searches = [s for s in unique_searches if s.get("source_type") == "kiwi"]
     google_searches = [s for s in unique_searches if s.get("source_type") == "google"]
 
-    all_analysis = {}  # url -> analysis_result
-
-    # — Kiwi.com GraphQL API（零认证，覆盖 MU/CA/NH/9C/HO 等全航司）—
-    if kiwi_searches:
-        from app.kiwi_api import get_kiwi_flights_for_searches
-
-        cached, remaining = _load_cached_results(state, kiwi_searches)
-        all_analysis.update(cached)
-        if not source_in_cooldown(state, "kiwi_api", now_jst()) and remaining:
-            proxy = choose_proxy(state, "kiwi_api", now_jst())
-            fetched = await asyncio.to_thread(
-                get_kiwi_flights_for_searches,
-                remaining, proxy_url=proxy.get("url"), proxy_id=proxy.get("id"),
-            )
-            all_analysis.update(fetched)
-            _record_results_for_source(state, "kiwi_api", fetched, remaining)
-
-    # — Google Flights API —
-    if google_searches:
-        from app.google_flights_api import get_google_flights_for_searches
-
-        cached, remaining = _load_cached_results(state, google_searches)
-        all_analysis.update(cached)
-        if not source_in_cooldown(state, "google_api", now_jst()) and remaining:
-            proxy = choose_proxy(state, "google_api", now_jst())
-            fetched = await asyncio.to_thread(
-                get_google_flights_for_searches,
-                remaining, proxy_url=proxy.get("url"), proxy_id=proxy.get("id"),
-            )
-            all_analysis.update(fetched)
-            _record_results_for_source(state, "google_api", fetched, remaining)
-
-        # 覆盖降级告警：Google 不可用时 JAL/Peach/GK 价格盲区，每小时最多一次
-        google_health = get_source_status_snapshot(state).get("google_api", {})
-        if google_health.get("status") in ("cooldown", "degraded"):
-            from datetime import datetime as _dt
-            last_alert_str = state.get("_google_coverage_alert_at")
-            last_alert = _dt.fromisoformat(last_alert_str) if last_alert_str else None
-            if last_alert is None or (now_jst() - last_alert).total_seconds() > 3600:
-                reason = google_health.get("last_block_reason") or "Chrome/CDP 连接失败"
-                tg_send(
-                    "⚠️ *Google Flights 覆盖降级*\n"
-                    "Chrome 容器不可用，以下航司价格暂时无法监控：\n"
-                    "• JAL (JL)\n• Peach Aviation (MM)\n• Jetstar Japan (GK)\n\n"
-                    f"原因: `{reason}`\n"
-                    "Spring + Kiwi 渠道仍正常运行。"
-                )
-                state["_google_coverage_alert_at"] = now_jst().isoformat()
-                log.warning(f"⚠️ Google 覆盖降级告警已推送: {reason}")
+    all_analysis = await execute_api_searches(state, kiwi_searches, google_searches)
 
     # 汇总日志
     got = sum(1 for a in all_analysis.values() if a.get("flights"))
@@ -410,7 +183,7 @@ async def _run_check_inner(force, all_trips, bot_module):
             has_flights=bool(a.get("flights")),
             request_mode=a.get("request_mode", "api"),
         )
-        _log_request_result(a, trip_ids=url_map.get(url, {}).get("trip_ids", []))
+        log_request_result(a, trip_ids=url_map.get(url, {}).get("trip_ids", []))
         if a.get("error") and not a.get("flights"):
             log.warning(f"  ⚠️ {a['error']}")
             if a.get("diagnosis"):
@@ -461,7 +234,9 @@ async def _run_check_inner(force, all_trips, bot_module):
             spring_proxy = choose_proxy(state, "spring_api", now_jst())
             spring = await asyncio.to_thread(
                 get_spring_price_for_trip,
-                trip, proxy_url=spring_proxy.get("url"), proxy_id=spring_proxy.get("id"),
+                trip,
+                proxy_url=spring_proxy.get("url"),
+                proxy_id=spring_proxy.get("id"),
                 price_cache=spring_price_cache,
             )
             record_source_outcome(
@@ -481,32 +256,42 @@ async def _run_check_inner(force, all_trips, bot_module):
             spring_best = spring.get("best_combo")
 
             # 将春秋直销价加入 results，确保写入 flight_prices 历史记录
-            spring_directions = [("outbound", "outbound")] if is_one_way else [("outbound", "outbound"), ("return", "return")]
+            spring_directions = (
+                [("outbound", "outbound")]
+                if is_one_way
+                else [("outbound", "outbound"), ("return", "return")]
+            )
             for direction, key in spring_directions:
                 spring_leg = spring.get(key)
                 if spring_leg and spring_leg.get("price_cny"):
                     route = spring_leg.get("route", "")
                     split = route.split("→")
                     parts = split if len(split) == 2 else ["", ""]
-                    results[direction].append({
-                        "source": f"春秋{parts[0]}{parts[1]}",
-                        "url": _make_spring_url(spring_leg.get("date") or "", parts[0], parts[1]),
-                        "flight_date": spring_leg.get("date"),
-                        "lowest_price": spring_leg.get("price_cny"),
-                        "flights": [{
-                            "airline": "春秋航空",
-                            "flight_no": "",
-                            "departure_time": "",
-                            "arrival_time": "",
-                            "origin": parts[0],
-                            "destination": parts[1],
-                            "price_cny": spring_leg.get("price_cny"),
-                            "original_price": None,
-                            "original_currency": "CNY",
-                            "stops": 0,
-                            "via": "",
-                        }],
-                    })
+                    results[direction].append(
+                        {
+                            "source": f"春秋{parts[0]}{parts[1]}",
+                            "url": make_spring_url(
+                                spring_leg.get("date") or "", parts[0], parts[1]
+                            ),
+                            "flight_date": spring_leg.get("date"),
+                            "lowest_price": spring_leg.get("price_cny"),
+                            "flights": [
+                                {
+                                    "airline": "春秋航空",
+                                    "flight_no": "",
+                                    "departure_time": "",
+                                    "arrival_time": "",
+                                    "origin": parts[0],
+                                    "destination": parts[1],
+                                    "price_cny": spring_leg.get("price_cny"),
+                                    "original_price": None,
+                                    "original_currency": "CNY",
+                                    "stops": 0,
+                                    "via": "",
+                                }
+                            ],
+                        }
+                    )
 
             combos = find_best_combinations(results, trip)
             save_to_db(results, combos, trip)
@@ -528,7 +313,10 @@ async def _run_check_inner(force, all_trips, bot_module):
                                 "price_cny": spring_best["outbound_cny"],
                                 "original_currency": "USD",
                                 "_source": "春秋官网",
-                                "_url": _make_spring_url(spring_best['outbound_date'] or '', *spring_best['outbound_route'].split('→')),
+                                "_url": make_spring_url(
+                                    spring_best["outbound_date"] or "",
+                                    *spring_best["outbound_route"].split("→"),
+                                ),
                                 "_flight_date": spring_best["outbound_date"],
                             },
                             "return": {
@@ -538,7 +326,10 @@ async def _run_check_inner(force, all_trips, bot_module):
                                 "price_cny": spring_best["return_cny"],
                                 "original_currency": "USD",
                                 "_source": "春秋官网",
-                                "_url": _make_spring_url(spring_best['return_date'] or '', *spring_best['return_route'].split('→')),
+                                "_url": make_spring_url(
+                                    spring_best["return_date"] or "",
+                                    *spring_best["return_route"].split("→"),
+                                ),
                                 "_flight_date": spring_best["return_date"],
                             },
                             "total": spring_best["total_cny"],
@@ -570,7 +361,7 @@ async def _run_check_inner(force, all_trips, bot_module):
                 # 检查已完成，在等待用户确认期间放开 checking_in_progress
                 # 否则"立即查价"按钮会永远显示"查价中"直到用户发送"确认收到"
                 bot_module.checking_in_progress = False
-                await push_until_ack(msg, state)
+                await push_until_ack(msg, state, shutdown_event)
             else:
                 trend = ""
                 if prev_best and best_total:
@@ -608,7 +399,11 @@ async def _run_check_inner(force, all_trips, bot_module):
                 interval = _get_check_interval_for_trip(trip)
                 freq = f"{interval // 3600}h" if interval else "?"
                 type_tag = "单程" if is_one_way else ""
-                date_range = trip["outbound_date"] if is_one_way else f"{trip['outbound_date']}→{trip.get('return_date', '?')}"
+                date_range = (
+                    trip["outbound_date"]
+                    if is_one_way
+                    else f"{trip['outbound_date']}→{trip.get('return_date', '?')}"
+                )
 
                 if is_one_way:
                     brief_lines.append(
@@ -652,7 +447,9 @@ async def _run_check_inner(force, all_trips, bot_module):
     # 保存前同步 last_tg_update_id：tg_command_listener 可能在本轮检查期间
     # 已将其推进，如果直接保存 state 会用检查开始时的旧值覆盖它
     _disk = load_state()
-    state["last_tg_update_id"] = _disk.get("last_tg_update_id", state.get("last_tg_update_id", 0))
+    state["last_tg_update_id"] = _disk.get(
+        "last_tg_update_id", state.get("last_tg_update_id", 0)
+    )
     save_state(state)
 
     # 发送汇总简报
@@ -672,6 +469,7 @@ async def main():
     trips = get_active_trips()
     log.info("=" * 55)
     from app.version import VERSION
+
     log.info(f"✈️ 机票价格监控系统启动 {VERSION} (Docker)")
     log.info(f"   监控行程: {len(trips)} 个")
     log.info(f"   检查间隔: ~{CHECK_INTERVAL}s (随机抖动)")
@@ -705,7 +503,7 @@ async def main():
     # 首次检查是否有未确认的通知（重启后继续推送）
     if state.get("pending_ack") and state.get("last_alert_msg"):
         log.info("发现未确认的通知，继续推送...")
-        await push_until_ack(state["last_alert_msg"], state)
+        await push_until_ack(state["last_alert_msg"], state, shutdown_event)
 
     # 主循环
     is_force = False
